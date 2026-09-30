@@ -206,6 +206,220 @@ var _ = Describe("L2 VNI configuration with OVS bridges", func() {
 			})
 		}, 30*time.Second, 1*time.Second).Should(Succeed())
 	})
+	It("should attach the veth as an access port for vlanID, and follow changes to it", func() {
+		const bridgeName = "test-ovs-vlan1"
+		Expect(createExternalOVSBridge(bridgeName)).To(Succeed(), "must pre-provision an OVS bridge")
+
+		createVRFInNamespace(testNS, "testred")
+		params := L2VNIParams{
+			VNIParams: VNIParams{
+				VRF: "testred", TargetNS: testNSPath(),
+				VTEPIP: "192.170.0.9/32", VNI: 100, VXLanPort: new(int32(4789)),
+			},
+			HostMaster: &HostMaster{Type: OVSBridgeLinkType, Name: new(bridgeName), VLANID: new(int32(11))},
+		}
+		hostVeth := vethNamesFromVNI(params.VNI).HostSide
+
+		Expect(SetupL2VNI(context.Background(), params)).To(Succeed())
+		checkVethAttachedToOVSBridge(Default, bridgeName, hostVeth)
+		checkOVSPortVLAN(Default, hostVeth, new(11))
+
+		By("changing the VLAN")
+		params.HostMaster.VLANID = new(int32(12))
+		Expect(SetupL2VNI(context.Background(), params)).To(Succeed())
+		checkOVSPortVLAN(Default, hostVeth, new(12))
+
+		By("removing the VLAN")
+		params.HostMaster.VLANID = nil
+		Expect(SetupL2VNI(context.Background(), params)).To(Succeed())
+		checkOVSPortVLAN(Default, hostVeth, nil)
+	})
+
+	It("should keep the VLAN when the host veth is re-created", func() {
+		const bridgeName = "test-ovs-vlan2"
+		Expect(createExternalOVSBridge(bridgeName)).To(Succeed(), "must pre-provision an OVS bridge")
+
+		createVRFInNamespace(testNS, "testred")
+		params := L2VNIParams{
+			VNIParams: VNIParams{
+				VRF: "testred", TargetNS: testNSPath(),
+				VTEPIP: "192.170.0.9/32", VNI: 100, VXLanPort: new(int32(4789)),
+			},
+			HostMaster: &HostMaster{Type: OVSBridgeLinkType, Name: new(bridgeName), VLANID: new(int32(11))},
+		}
+		hostVeth := vethNamesFromVNI(params.VNI).HostSide
+
+		Expect(SetupL2VNI(context.Background(), params)).To(Succeed())
+		checkOVSPortVLAN(Default, hostVeth, new(11))
+
+		By("deleting the host veth")
+		link, err := netlink.LinkByName(hostVeth)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(netlink.LinkDel(link)).To(Succeed())
+		checkOVSPortVLAN(Default, hostVeth, new(11))
+
+		By("setting the VNI up again")
+		Expect(SetupL2VNI(context.Background(), params)).To(Succeed())
+		checkVethAttachedToOVSBridge(Default, bridgeName, hostVeth)
+		checkOVSPortVLAN(Default, hostVeth, new(11))
+	})
+
+	It("should leave a VLAN set by other means alone while vlanID is unset", func() {
+		const bridgeName = "test-ovs-vlan3"
+		Expect(createExternalOVSBridge(bridgeName)).To(Succeed(), "must pre-provision an OVS bridge")
+
+		createVRFInNamespace(testNS, "testred")
+		params := L2VNIParams{
+			VNIParams: VNIParams{
+				VRF: "testred", TargetNS: testNSPath(),
+				VTEPIP: "192.170.0.9/32", VNI: 100, VXLanPort: new(int32(4789)),
+			},
+			HostMaster: &HostMaster{Type: OVSBridgeLinkType, Name: new(bridgeName)},
+		}
+		hostVeth := vethNamesFromVNI(params.VNI).HostSide
+
+		Expect(SetupL2VNI(context.Background(), params)).To(Succeed())
+		checkOVSPortVLAN(Default, hostVeth, nil)
+
+		By("tagging the port outside the controller")
+		out, err := exec.Command("ovs-vsctl", "set", "port", hostVeth, "tag=7").CombinedOutput()
+		Expect(err).NotTo(HaveOccurred(), string(out))
+		Expect(SetupL2VNI(context.Background(), params)).To(Succeed())
+		tag, owned := ovsPortVLAN(Default, hostVeth)
+		Expect(tag).To(Equal(new(7)))
+		Expect(owned).To(BeFalse())
+
+		By("setting vlanID, which takes over the port's VLAN")
+		params.HostMaster.VLANID = new(int32(11))
+		Expect(SetupL2VNI(context.Background(), params)).To(Succeed())
+		checkOVSPortVLAN(Default, hostVeth, new(11))
+	})
+	It("should leave a VLAN alone that someone changed after the controller set it", func() {
+		const bridgeName = "test-ovs-vlan4"
+		Expect(createExternalOVSBridge(bridgeName)).To(Succeed(), "must pre-provision an OVS bridge")
+
+		createVRFInNamespace(testNS, "testred")
+		params := L2VNIParams{
+			VNIParams: VNIParams{
+				VRF: "testred", TargetNS: testNSPath(),
+				VTEPIP: "192.170.0.9/32", VNI: 100, VXLanPort: new(int32(4789)),
+			},
+			HostMaster: &HostMaster{Type: OVSBridgeLinkType, Name: new(bridgeName), VLANID: new(int32(11))},
+		}
+		hostVeth := vethNamesFromVNI(params.VNI).HostSide
+
+		Expect(SetupL2VNI(context.Background(), params)).To(Succeed())
+		checkOVSPortVLAN(Default, hostVeth, new(11))
+
+		By("re-tagging the port outside the controller")
+		out, err := exec.Command("ovs-vsctl", "set", "port", hostVeth, "tag=12").CombinedOutput()
+		Expect(err).NotTo(HaveOccurred(), string(out))
+
+		By("removing vlanID")
+		params.HostMaster.VLANID = nil
+		Expect(SetupL2VNI(context.Background(), params)).To(Succeed())
+		tag, owned := ovsPortVLAN(Default, hostVeth)
+		Expect(tag).To(Equal(new(12)))
+		Expect(owned).To(BeFalse())
+	})
+
+	It("should refuse, and not re-tag, a port that is attached to another bridge", func() {
+		const firstBridge, secondBridge = "test-ovs-vlan5", "test-ovs-vlan6"
+		Expect(createExternalOVSBridge(firstBridge)).To(Succeed(), "must pre-provision an OVS bridge")
+		Expect(createExternalOVSBridge(secondBridge)).To(Succeed(), "must pre-provision an OVS bridge")
+
+		createVRFInNamespace(testNS, "testred")
+		params := L2VNIParams{
+			VNIParams: VNIParams{
+				VRF: "testred", TargetNS: testNSPath(),
+				VTEPIP: "192.170.0.9/32", VNI: 100, VXLanPort: new(int32(4789)),
+			},
+			HostMaster: &HostMaster{Type: OVSBridgeLinkType, Name: new(firstBridge), VLANID: new(int32(11))},
+		}
+		hostVeth := vethNamesFromVNI(params.VNI).HostSide
+
+		Expect(SetupL2VNI(context.Background(), params)).To(Succeed())
+		checkVethAttachedToOVSBridge(Default, firstBridge, hostVeth)
+
+		By("asking for the same port on another bridge, with another VLAN")
+		params.HostMaster.Name = new(secondBridge)
+		params.HostMaster.VLANID = new(int32(12))
+		err := SetupL2VNI(context.Background(), params)
+		Expect(err).To(MatchError(ContainSubstring(
+			fmt.Sprintf("port %q is attached to bridge %q, not to %q", hostVeth, firstBridge, secondBridge))))
+
+		checkVethAttachedToOVSBridge(Default, firstBridge, hostVeth)
+		checkVethNotAttachedToOVSBridge(Default, secondBridge, hostVeth)
+		checkOVSPortVLAN(Default, hostVeth, new(11))
+	})
+	It("should make an existing trunk port an access port, and restore trunk when vlanID is removed", func() {
+		const bridgeName = "test-ovs-vlan7"
+		Expect(createExternalOVSBridge(bridgeName)).To(Succeed(), "must pre-provision an OVS bridge")
+
+		createVRFInNamespace(testNS, "testred")
+		params := L2VNIParams{
+			VNIParams: VNIParams{
+				VRF: "testred", TargetNS: testNSPath(),
+				VTEPIP: "192.170.0.9/32", VNI: 100, VXLanPort: new(int32(4789)),
+			},
+			HostMaster: &HostMaster{Type: OVSBridgeLinkType, Name: new(bridgeName)},
+		}
+		hostVeth := vethNamesFromVNI(params.VNI).HostSide
+
+		Expect(SetupL2VNI(context.Background(), params)).To(Succeed())
+		ovsVsctl("set", "port", hostVeth, "vlan_mode=trunk")
+
+		By("setting vlanID")
+		params.HostMaster.VLANID = new(int32(11))
+		Expect(SetupL2VNI(context.Background(), params)).To(Succeed())
+		checkOVSPortVLAN(Default, hostVeth, new(11))
+		Expect(ovsVsctl("get", "port", hostVeth, "vlan_mode")).To(Equal("access"))
+
+		By("removing vlanID")
+		params.HostMaster.VLANID = nil
+		Expect(SetupL2VNI(context.Background(), params)).To(Succeed())
+		checkOVSPortVLAN(Default, hostVeth, nil)
+		Expect(ovsVsctl("get", "port", hostVeth, "vlan_mode")).To(Equal("trunk"))
+		Expect(ovsVsctl("get", "port", hostVeth, "external_ids")).To(Equal("{}"))
+	})
+
+	It("should not write a port another client changed after it was read, and keep that change", func() {
+		const bridgeName = "test-ovs-vlan8"
+		Expect(createExternalOVSBridge(bridgeName)).To(Succeed(), "must pre-provision an OVS bridge")
+
+		createVRFInNamespace(testNS, "testred")
+		params := L2VNIParams{
+			VNIParams: VNIParams{
+				VRF: "testred", TargetNS: testNSPath(),
+				VTEPIP: "192.170.0.9/32", VNI: 100, VXLanPort: new(int32(4789)),
+			},
+			HostMaster: &HostMaster{Type: OVSBridgeLinkType, Name: new(bridgeName), VLANID: new(int32(11))},
+		}
+		hostVeth := vethNamesFromVNI(params.VNI).HostSide
+		Expect(SetupL2VNI(context.Background(), params)).To(Succeed())
+
+		ctx := context.Background()
+		ovs, err := NewOVSClient(ctx)
+		Expect(err).NotTo(HaveOccurred())
+		defer ovs.Close()
+		_, err = ovs.Monitor(ctx, ovs.NewMonitor(libovsclient.WithTable(&ovsmodel.Port{})))
+		Expect(err).NotTo(HaveOccurred())
+		observed := &ovsmodel.Port{Name: hostVeth}
+		Expect(ovs.Get(ctx, observed)).To(Succeed())
+
+		By("another client adding an unrelated key after the port was read")
+		ovsVsctl("set", "port", hostVeth, "external_ids:other=b")
+
+		By("releasing the VLAN against the stale read")
+		Expect(applyPortVLAN(ctx, ovs, observed.DeepCopy(), nil)).To(MatchError(errPortChanged))
+		checkOVSPortVLAN(Default, hostVeth, new(11))
+		Expect(ovsVsctl("get", "port", hostVeth, "external_ids:other")).To(Equal("b"))
+
+		By("releasing it again, which re-reads the port")
+		Expect(ensurePortVLAN(ctx, ovs, hostVeth, nil)).To(Succeed())
+		checkOVSPortVLAN(Default, hostVeth, nil)
+		Expect(ovsVsctl("get", "port", hostVeth, "external_ids:other")).To(Equal("b"))
+	})
 })
 
 func checkOVSBridgeExists(g Gomega, bridgeName string) {
@@ -351,4 +565,34 @@ func cleanupOVSBridges() {
 			_ = exec.Command("ovs-vsctl", "del-br", br).Run()
 		}
 	}
+}
+
+// checkOVSPortVLAN checks that the port is an access port for vlan, carrying
+// the controller's owner key, or that it has neither when vlan is nil.
+func checkOVSPortVLAN(g Gomega, portName string, vlan *int) {
+	tag, owned := ovsPortVLAN(g, portName)
+	g.Expect(tag).To(Equal(vlan), "port %s VLAN", portName)
+	g.Expect(owned).To(Equal(vlan != nil), "port %s owner key", portName)
+}
+
+func ovsPortVLAN(g Gomega, portName string) (*int, bool) {
+	ctx := context.Background()
+	ovs, err := NewOVSClient(ctx)
+	g.Expect(err).NotTo(HaveOccurred())
+	defer ovs.Close()
+
+	_, err = ovs.Monitor(ctx, ovs.NewMonitor(libovsclient.WithTable(&ovsmodel.Port{})))
+	g.Expect(err).NotTo(HaveOccurred())
+
+	port := &ovsmodel.Port{Name: portName}
+	g.Expect(ovs.Get(ctx, port)).To(Succeed())
+	_, owned := port.ExternalIDs[portVLANOwnerKey]
+	return port.Tag, owned
+}
+
+func ovsVsctl(args ...string) string {
+	GinkgoHelper()
+	out, err := exec.Command("ovs-vsctl", args...).CombinedOutput()
+	Expect(err).NotTo(HaveOccurred(), string(out))
+	return strings.Trim(strings.TrimSpace(string(out)), `"`)
 }

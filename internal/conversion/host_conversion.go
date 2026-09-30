@@ -616,6 +616,7 @@ func convertHostMaster(l2vni *v1alpha1.L2VNI) (*hostnetwork.HostMaster, error) {
 				Name:       l2vni.Spec.HostMaster.OVSBridge.Name,
 				Type:       l2vni.Spec.HostMaster.Type,
 				AutoCreate: new(l2vni.Spec.HostMaster.OVSBridge.Lifecycle == v1alpha1.BridgeLifecycleManaged),
+				VLANID:     l2vni.Spec.HostMaster.OVSBridge.VLANID,
 			}, nil
 		}
 	default:

@@ -498,6 +498,57 @@ func TestAPItoHostConfig(t *testing.T) {
 			wantErr:         false,
 		},
 		{
+			name:      "l2 vni with ovs bridge hostmaster and vlanID",
+			nodeIndex: 0,
+			targetNS:  "namespace",
+			underlays: []v1alpha1.Underlay{
+				{Spec: v1alpha1.UnderlaySpec{Interfaces: []v1alpha1.UnderlayInterface{{Type: "NetworkDevice", NetworkDevice: &v1alpha1.NetworkDevice{InterfaceName: "eth0"}}}, TunnelEndpoint: &v1alpha1.TunnelEndpointConfig{CIDRs: []string{"10.0.0.0/24"}}}},
+			},
+			vnis: []v1alpha1.L3VNI{},
+			l2vnis: []v1alpha1.L2VNI{
+				{Spec: v1alpha1.L2VNISpec{
+					VNI: 202, VXLanPort: new(int32(4789)),
+					HostMaster: &v1alpha1.HostMaster{
+						Type: v1alpha1.OVSBridge,
+						OVSBridge: &v1alpha1.OVSBridgeConfig{
+							Lifecycle: v1alpha1.BridgeLifecycleExternal,
+							Name:      new("br-data"),
+							VLANID:    new(int32(11)),
+						},
+					},
+				}},
+			},
+			l3Passthrough: []v1alpha1.L3Passthrough{},
+			wantUnderlay: hostnetwork.UnderlayParams{
+				UnderlayInterfaces: netdevInterfaces("eth0"),
+				TargetNS:           "namespace",
+				TunnelEndpoint: &hostnetwork.UnderlayTunnelEndpointParams{
+					IPv4CIDR: "10.0.0.0/32",
+				},
+			},
+			wantL3VNIParams: []hostnetwork.L3VNIParams{},
+			wantL2VNIParams: []hostnetwork.L2VNIParams{
+				{
+					VNIParams: hostnetwork.VNIParams{
+						TargetNS:       "namespace",
+						VTEPIP:         "10.0.0.0/32",
+						VNI:            202,
+						VXLanPort:      new(int32(4789)),
+						TunnelOverhead: hostnetwork.VXLanOverhead,
+					},
+					HostMaster: &hostnetwork.HostMaster{
+						Name:       new("br-data"),
+						Type:       v1alpha1.OVSBridge,
+						AutoCreate: new(false),
+						VLANID:     new(int32(11)),
+					},
+				},
+			},
+			wantL3VPNParams: []hostnetwork.L3VPNParams{},
+			wantPassthrough: nil,
+			wantErr:         false,
+		},
+		{
 			name:      "l3 vni without hostsession",
 			nodeIndex: 0,
 			targetNS:  "namespace",

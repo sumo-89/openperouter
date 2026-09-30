@@ -767,6 +767,7 @@ _Appears in:_
 | --- | --- | --- | --- |
 | `lifecycle` _[BridgeLifecycle](#bridgelifecycle)_ | lifecycle determines if the OVS bridge is managed by the controller or<br />provided by the user. |  | Enum: [Managed External] <br />Required: \{\} <br /> |
 | `name` _string_ | name of the OVS bridge interface. Required when lifecycle is<br />External, and must be omitted when it is Managed, in which case the<br />bridge is named br-hs-<VNI>. |  | MaxLength: 15 <br />Pattern: `^[a-zA-Z][a-zA-Z0-9_-]*$` <br />Optional: \{\} <br /> |
+| `vlanID` _integer_ | vlanID is the VLAN this L2VNI uses on the OVS bridge. The veth is<br />attached as an access port for this VLAN: frames the bridge forwards in<br />this VLAN reach the L2VNI untagged, and frames from the L2VNI enter the<br />bridge in this VLAN. This lets several L2VNIs share one bridge, for<br />example an External bridge that also carries OVN-Kubernetes localnet<br />networks, one VLAN each.<br />The VLAN is set in the same transaction that creates the port, so the<br />port never forwards untagged. An existing port whose vlan_mode is not<br />access (for example trunk) is switched to access, and its previous mode<br />is restored when the field is removed. Removing the field clears a VLAN<br />the controller set, unless the port has been re-tagged by other means<br />since; a VLAN set on the port by other means is left untouched while<br />the field is unset. |  | Maximum: 4094 <br />Minimum: 1 <br />Optional: \{\} <br /> |
 
 
 #### RawFRRConfig

@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"log/slog"
 	"slices"
+	"strconv"
 	"time"
 
 	libovsclient "github.com/ovn-kubernetes/libovsdb/client"
@@ -20,7 +21,24 @@ import (
 
 const (
 	defaultOVSSocketPath = "unix:/var/run/openvswitch/db.sock"
+
+	// portVLANOwnerKey is the port external_ids key recording a VLAN set by
+	// the controller, so that dropping vlanID from an L2VNI clears that VLAN
+	// without touching one set on the port by other means.
+	portVLANOwnerKey = "openperouter-vlan"
+
+	// portVLANModeKey records the vlan_mode a port had before the controller
+	// made it an access port, so that dropping vlanID restores it.
+	portVLANModeKey = "openperouter-vlan-mode"
+
+	// portVLANAttempts bounds the retries when another OVSDB client changes a
+	// port between the controller reading it and writing its VLAN.
+	portVLANAttempts = 3
 )
+
+// errPortChanged means the port no longer matched what the controller read
+// when its VLAN transaction ran, so nothing was written.
+var errPortChanged = errors.New("port changed concurrently")
 
 var OVSSocketPath = defaultOVSSocketPath
 
@@ -96,8 +114,8 @@ func EnsureBridge(ctx context.Context, ovs libovsclient.Client, bridgeName strin
 	return realUUID, nil
 }
 
-func ensureOVSBridgeAndAttach(ctx context.Context, bridgeName, ifaceName string) error {
-	slog.Info("ensureOVSBridgeAndAttach", "bridge", bridgeName, "interface", ifaceName)
+func ensureOVSBridgeAndAttach(ctx context.Context, bridgeName, ifaceName string, vlanID *int32) error {
+	slog.Info("ensureOVSBridgeAndAttach", "bridge", bridgeName, "interface", ifaceName, "vlanID", vlanID)
 
 	// Verify the interface exists before trying to attach to OVS
 	link, err := netlink.LinkByName(ifaceName)
@@ -112,12 +130,14 @@ func ensureOVSBridgeAndAttach(ctx context.Context, bridgeName, ifaceName string)
 	}
 	defer ovs.Close()
 
-	return ensureOVSBridgeAndAttachWithClient(ctx, ovs, bridgeName, ifaceName)
+	return ensureOVSBridgeAndAttachWithClient(ctx, ovs, bridgeName, ifaceName, vlanID)
 }
 
-// ensureOVSBridgeAndAttachWithClient ensures an OVS bridge exists and attaches ifaceName as a port.
+// ensureOVSBridgeAndAttachWithClient ensures an OVS bridge exists and attaches ifaceName as a port,
+// as an access port for vlanID when it is set.
 // This version accepts a client parameter for testing.
-func ensureOVSBridgeAndAttachWithClient(ctx context.Context, ovs libovsclient.Client, bridgeName, ifaceName string) error {
+func ensureOVSBridgeAndAttachWithClient(ctx context.Context, ovs libovsclient.Client, bridgeName, ifaceName string,
+	vlanID *int32) error {
 	// Cache for indexed operations
 	if _, err := ovs.Monitor(ctx,
 		ovs.NewMonitor(
@@ -140,7 +160,7 @@ func ensureOVSBridgeAndAttachWithClient(ctx context.Context, ovs libovsclient.Cl
 		return fmt.Errorf("failed to create internal port for bridge %q: %w", bridgeName, err)
 	}
 
-	if err := ensurePortAttachedToBridge(ctx, ovs, bridgeUUID, ifaceName); err != nil {
+	if err := ensurePortAttachedToBridge(ctx, ovs, bridgeUUID, ifaceName, vlanID); err != nil {
 		return fmt.Errorf("failed to attach veth %q to bridge %q: %w", ifaceName, bridgeName, err)
 	}
 
@@ -157,7 +177,8 @@ func ensureOVSBridgeAndAttachWithClient(ctx context.Context, ovs libovsclient.Cl
 	return nil
 }
 
-func ensurePortAttachedToBridge(ctx context.Context, ovs libovsclient.Client, bridgeUUID, interfaceName string) error {
+func ensurePortAttachedToBridge(ctx context.Context, ovs libovsclient.Client, bridgeUUID, interfaceName string,
+	vlanID *int32) error {
 	iface := &ovsmodel.Interface{Name: interfaceName}
 	interfaceUUID := ""
 	err := ovs.Get(ctx, iface)
@@ -184,10 +205,17 @@ func ensurePortAttachedToBridge(ctx context.Context, ovs libovsclient.Client, br
 	}
 
 	if portUUID != "" {
-		if slices.Contains(bridge.Ports, portUUID) {
-			slog.Debug("port already attached to bridge", "port", interfaceName, "bridge", bridge.Name)
-			return nil
+		if !slices.Contains(bridge.Ports, portUUID) {
+			// A Port row that no bridge references is garbage-collected, so this one is on another
+			// bridge. Inserting it here too would put one port in two bridges.
+			return fmt.Errorf("port %q is attached to bridge %q, not to %q",
+				interfaceName, bridgeHoldingPort(ctx, ovs, portUUID), bridge.Name)
 		}
+		if err := ensurePortVLAN(ctx, ovs, interfaceName, vlanID); err != nil {
+			return fmt.Errorf("failed to set VLAN on port %q: %w", interfaceName, err)
+		}
+		slog.Debug("port already attached to bridge", "port", interfaceName, "bridge", bridge.Name)
+		return nil
 	}
 
 	var operations []ovsdb.Operation
@@ -210,13 +238,14 @@ func ensurePortAttachedToBridge(ctx context.Context, ovs libovsclient.Client, br
 
 	portNamedUUID := portUUID
 	if portUUID == "" {
-		portOp, err := ovs.Create(
-			&ovsmodel.Port{
-				UUID:       "new_port",
-				Name:       interfaceName,
-				Interfaces: []string{interfaceNamedUUID},
-			},
-		)
+		newPort := &ovsmodel.Port{
+			UUID:       "new_port",
+			Name:       interfaceName,
+			Interfaces: []string{interfaceNamedUUID},
+		}
+		// The VLAN goes in with the port, so that it never forwards untagged.
+		reconcilePortVLAN(newPort, vlanID)
+		portOp, err := ovs.Create(newPort)
 		if err != nil {
 			return fmt.Errorf("failed to create port operation: %w", err)
 		}
@@ -251,6 +280,212 @@ func ensurePortAttachedToBridge(ctx context.Context, ovs libovsclient.Client, br
 	slog.Info("successfully added interface to bridge", "name", interfaceName, "bridge", bridge.Name)
 
 	return nil
+}
+
+// ensurePortVLAN makes an existing port an access port for vlanID, or, when
+// vlanID is nil, releases what the controller set earlier (see reconcilePortVLAN).
+// A concurrent change to the port aborts the write, and it is retried against
+// the port as it is then.
+func ensurePortVLAN(ctx context.Context, ovs libovsclient.Client, portName string, vlanID *int32) error {
+	for attempt := 1; ; attempt++ {
+		port := &ovsmodel.Port{Name: portName}
+		if err := ovs.Get(ctx, port); err != nil {
+			return fmt.Errorf("failed to get port %q: %w", portName, err)
+		}
+		err := applyPortVLAN(ctx, ovs, port, vlanID)
+		if !errors.Is(err, errPortChanged) || attempt == portVLANAttempts {
+			return err
+		}
+		slog.Info("port changed while setting its VLAN, retrying", "port", portName, "attempt", attempt)
+		// Give the monitor time to deliver the change before reading the port again.
+		// 100 ms is a heuristic, not a guarantee: if the cache is still stale, the
+		// next attempt aborts on the wait again, and the last one reports it.
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(100 * time.Millisecond):
+		}
+	}
+}
+
+// applyPortVLAN writes the VLAN state reconcilePortVLAN computes for observed,
+// in one transaction guarded by a wait on the columns it was computed from:
+// if another client changed the port's tag, vlan_mode or external_ids since
+// observed was read, the transaction aborts with errPortChanged. The
+// controller's keys are changed with key-scoped mutations, so other
+// external_ids entries are never rewritten.
+func applyPortVLAN(ctx context.Context, ovs libovsclient.Client, observed *ovsmodel.Port, vlanID *int32) error {
+	desired := observed.DeepCopy()
+	reconcilePortVLAN(desired, vlanID)
+	scalarFields := changedScalarFields(observed, desired)
+	deleteKeys, insertIDs := controllerKeyChanges(observed.ExternalIDs, desired.ExternalIDs)
+	if len(scalarFields) == 0 && len(deleteKeys) == 0 && len(insertIDs) == 0 {
+		return nil
+	}
+
+	noWait := 0
+	ops, err := ovs.Where(observed).Wait(ovsdb.WaitConditionEqual, &noWait, observed,
+		&observed.Tag, &observed.VLANMode, &observed.ExternalIDs)
+	if err != nil {
+		return fmt.Errorf("failed to create port wait operation: %w", err)
+	}
+	if len(scalarFields) > 0 {
+		updateOps, err := ovs.Where(desired).Update(desired, scalarFields...)
+		if err != nil {
+			return fmt.Errorf("failed to create port update operation: %w", err)
+		}
+		ops = append(ops, updateOps...)
+	}
+	var mutations []model.Mutation
+	if len(deleteKeys) > 0 {
+		mutations = append(mutations, model.Mutation{
+			Field: &desired.ExternalIDs, Mutator: ovsdb.MutateOperationDelete, Value: deleteKeys,
+		})
+	}
+	if len(insertIDs) > 0 {
+		mutations = append(mutations, model.Mutation{
+			Field: &desired.ExternalIDs, Mutator: ovsdb.MutateOperationInsert, Value: insertIDs,
+		})
+	}
+	if len(mutations) > 0 {
+		mutateOps, err := ovs.Where(desired).Mutate(desired, mutations...)
+		if err != nil {
+			return fmt.Errorf("failed to create port mutate operation: %w", err)
+		}
+		ops = append(ops, mutateOps...)
+	}
+
+	reply, err := ovs.Transact(ctx, ops...)
+	if err != nil {
+		return fmt.Errorf("OVS transaction failed: %w", err)
+	}
+	if waitTimedOut(reply) {
+		return fmt.Errorf("port %q: %w", observed.Name, errPortChanged)
+	}
+	if _, err := ovsdb.CheckOperationResults(reply, ops); err != nil {
+		return fmt.Errorf("OVS operation failed: %w", err)
+	}
+
+	slog.Info("reconciled VLAN on OVS port", "port", observed.Name, "vlanID", vlanID,
+		"tag", desired.Tag, "vlanMode", desired.VLANMode)
+	return nil
+}
+
+// reconcilePortVLAN sets the port's VLAN and owner key for vlanID, and makes it
+// an access port: a vlan_mode other than access is replaced, and the previous
+// mode is recorded under portVLANModeKey. With vlanID nil it only ever undoes
+// what the controller did: the tag is cleared when the owner key is present and
+// the tag still equals it, and a recorded mode is restored while the port is
+// still in access mode. A tag or mode without the controller's keys, or one
+// somebody changed after the controller set it, is left alone, and in the
+// latter case the stale keys are dropped.
+func reconcilePortVLAN(port *ovsmodel.Port, vlanID *int32) {
+	if vlanID != nil {
+		setPortVLAN(port, *vlanID)
+		return
+	}
+
+	owner, owned := port.ExternalIDs[portVLANOwnerKey]
+	if !owned {
+		return
+	}
+	delete(port.ExternalIDs, portVLANOwnerKey)
+	previousMode, modeChanged := port.ExternalIDs[portVLANModeKey]
+	delete(port.ExternalIDs, portVLANModeKey)
+	if port.Tag == nil || strconv.Itoa(*port.Tag) != owner {
+		return
+	}
+	port.Tag = nil
+	if modeChanged && isAccessMode(port.VLANMode) {
+		restored := previousMode
+		port.VLANMode = &restored
+	}
+}
+
+func setPortVLAN(port *ovsmodel.Port, vlanID int32) {
+	port.Tag = new(int(vlanID))
+	if port.ExternalIDs == nil {
+		port.ExternalIDs = map[string]string{}
+	}
+	port.ExternalIDs[portVLANOwnerKey] = strconv.Itoa(int(vlanID))
+	// An empty vlan_mode with a tag is access already; any explicit other mode is not.
+	if port.VLANMode == nil || isAccessMode(port.VLANMode) {
+		return
+	}
+	if _, recorded := port.ExternalIDs[portVLANModeKey]; !recorded {
+		port.ExternalIDs[portVLANModeKey] = *port.VLANMode
+	}
+	port.VLANMode = new(ovsmodel.PortVLANModeAccess)
+}
+
+// waitTimedOut tells whether the transaction was aborted by its leading wait:
+// with a timeout of 0, OVSDB answers "timed out" when the row no longer matches.
+// Any other error on the wait (a malformed one, say) is not a concurrent change.
+func waitTimedOut(reply []ovsdb.OperationResult) bool {
+	return len(reply) > 0 && reply[0].Error == "timed out"
+}
+
+func isAccessMode(mode *ovsmodel.PortVLANMode) bool {
+	return mode != nil && *mode == ovsmodel.PortVLANModeAccess
+}
+
+// changedScalarFields lists the tag and vlan_mode fields of desired that differ from observed.
+func changedScalarFields(observed, desired *ovsmodel.Port) []any {
+	var fields []any
+	if !equalTag(observed.Tag, desired.Tag) {
+		fields = append(fields, &desired.Tag)
+	}
+	if !equalMode(observed.VLANMode, desired.VLANMode) {
+		fields = append(fields, &desired.VLANMode)
+	}
+	return fields
+}
+
+// controllerKeyChanges returns the controller's external_ids keys to delete and
+// the entries to insert to turn observed into desired. A changed value is a
+// delete followed by an insert, since an OVSDB map insert never overwrites.
+func controllerKeyChanges(observed, desired map[string]string) ([]string, map[string]string) {
+	var deleteKeys []string
+	insertIDs := map[string]string{}
+	for _, key := range []string{portVLANOwnerKey, portVLANModeKey} {
+		oldValue, had := observed[key]
+		newValue, has := desired[key]
+		if had && (!has || oldValue != newValue) {
+			deleteKeys = append(deleteKeys, key)
+		}
+		if has && (!had || oldValue != newValue) {
+			insertIDs[key] = newValue
+		}
+	}
+	if len(insertIDs) == 0 {
+		insertIDs = nil
+	}
+	return deleteKeys, insertIDs
+}
+
+func equalMode(a, b *ovsmodel.PortVLANMode) bool {
+	if a == nil || b == nil {
+		return a == b
+	}
+	return *a == *b
+}
+
+func equalTag(a, b *int) bool {
+	if a == nil || b == nil {
+		return a == b
+	}
+	return *a == *b
+}
+
+// bridgeHoldingPort names the bridge that references portUUID, for error messages.
+func bridgeHoldingPort(ctx context.Context, ovs libovsclient.Client, portUUID string) string {
+	var bridges []ovsmodel.Bridge
+	err := ovs.WhereCache(func(b *ovsmodel.Bridge) bool { return slices.Contains(b.Ports, portUUID) }).
+		List(ctx, &bridges)
+	if err != nil || len(bridges) == 0 {
+		return "<unknown>"
+	}
+	return bridges[0].Name
 }
 
 // ensureInternalPortForBridge creates an OVS internal port for the bridge.

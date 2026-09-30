@@ -64,6 +64,7 @@ type HostMaster struct {
 	Name       *string
 	Type       string
 	AutoCreate *bool
+	VLANID     *int32
 }
 
 const (
@@ -230,7 +231,7 @@ func setupHostMaster(ctx context.Context, params L2VNIParams, hostVeth netlink.L
 		if ptr.Deref(bridgeConfig.AutoCreate, false) {
 			lowerDeviceName = hostBridgeName(params.VNI)
 		}
-		if err := ensureOVSBridgeAndAttach(ctx, lowerDeviceName, hostVeth.Attrs().Name); err != nil {
+		if err := ensureOVSBridgeAndAttach(ctx, lowerDeviceName, hostVeth.Attrs().Name, bridgeConfig.VLANID); err != nil {
 			return fmt.Errorf("failed to ensure OVS bridge %s and attach %s: %w", lowerDeviceName, hostVeth.Attrs().Name, err)
 		}
 	case BridgeLinkType:

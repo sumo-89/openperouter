@@ -171,6 +171,7 @@ L2VNIs provide Layer 2 connectivity across nodes using EVPN tunnels. Unlike L3VN
 | `hostMaster.linuxBridge.name` | string | Name of the Linux bridge to attach to. Only valid when `External` | Only when `External` |
 | `hostMaster.ovsBridge.lifecycle` | string | How the OVS bridge is provisioned (`Managed` or `External`) | Yes |
 | `hostMaster.ovsBridge.name` | string | Name of the OVS bridge to attach to. Only valid when `External` | Only when `External` |
+| `hostMaster.ovsBridge.vlanID` | integer | VLAN (1-4094) this L2VNI uses on the OVS bridge: the host veth becomes an access port for it | No |
 | `nodeSelector` | object | Label selector to target specific nodes (applies to all nodes if omitted) | No |
 
 ### L2VNI Example
@@ -201,6 +202,51 @@ Route targets use the same `ASN:member` or `IPv4-address:member` formats as
 L3VNIs and L3VPNs. Both lists are optional. When they are omitted, the L2VNI
 retains the default route-target behavior.
 
+### Sharing one OVS bridge between several L2VNIs
+
+Without `vlanID`, the host veth is a plain port on the OVS bridge and carries
+whatever the bridge sends it, so a shared `External` bridge would join every
+L2VNI attached to it into one L2 domain. Setting `vlanID` makes the veth an
+access port for that VLAN: frames the bridge forwards in the VLAN reach the
+L2VNI untagged, and frames from the L2VNI enter the bridge in the VLAN. This is
+the shape needed when an OVN-Kubernetes `localnet` network per VLAN shares the
+bridge with the router, for example an OVS bridge mapped to a physical network
+that several `ClusterUserDefinedNetwork`s with `vlan.mode: Access` use:
+
+```yaml
+apiVersion: network.openperouter.io/v1alpha1
+kind: L2VNI
+metadata:
+  name: l2blue
+  namespace: openperouter-system
+spec:
+  vni: 220
+  routingDomain:
+    type: L3VNI
+    l3vni:
+      name: red
+  gatewayIPs:
+  - 192.168.20.1/24
+  hostMaster:
+    type: OVSBridge
+    ovsBridge:
+      lifecycle: External
+      name: br-data
+      vlanID: 11
+```
+
+The VLAN is written in the same OVSDB transaction that creates the port, so the
+port never forwards untagged, and it survives router and controller restarts
+and re-creation of the veth. If the port already exists with a `vlan_mode`
+other than `access` (for example `trunk`), the controller switches it to
+`access` and records the previous mode, which it restores when `vlanID` is
+removed. Changing `vlanID` re-tags the port; removing it clears the VLAN the
+controller set, unless the port has been re-tagged by other means since. A VLAN
+set on the port by other means is left untouched while `vlanID` is unset. The
+controller changes only its own `external_ids` keys (`openperouter-vlan`,
+`openperouter-vlan-mode`) and aborts and retries its write if another client
+changed the port in between.
+
 ## What Happens During Reconciliation
 
 When you create or update VNI configurations, OpenPERouter automatically:
@@ -211,7 +257,7 @@ When you create or update VNI configurations, OpenPERouter automatically:
 4. **Attaches the veth**: the veth is connected to the bridge corresponding to the l2 domain
 5. **Optionally creates a bridge on the host**: if the bridge `lifecycle` is `Managed`, named `br-hs-<VNI>`
 6. **Optionally connects the host veth to the bridge on the host**: if the bridge `lifecycle` is `Managed` or a name
-is set
+is set, as an access port for `vlanID` when it is set on an OVS bridge
 
 ## Per-Node Configuration
 

@@ -136,6 +136,25 @@ spec:
                         maxLength: 15
                         pattern: ^[a-zA-Z][a-zA-Z0-9_-]*$
                         type: string
+                      vlanID:
+                        description: |-
+                          vlanID is the VLAN this L2VNI uses on the OVS bridge. The veth is
+                          attached as an access port for this VLAN: frames the bridge forwards in
+                          this VLAN reach the L2VNI untagged, and frames from the L2VNI enter the
+                          bridge in this VLAN. This lets several L2VNIs share one bridge, for
+                          example an External bridge that also carries OVN-Kubernetes localnet
+                          networks, one VLAN each.
+                          The VLAN is set in the same transaction that creates the port, so the
+                          port never forwards untagged. An existing port whose vlan_mode is not
+                          access (for example trunk) is switched to access, and its previous mode
+                          is restored when the field is removed. Removing the field clears a VLAN
+                          the controller set, unless the port has been re-tagged by other means
+                          since; a VLAN set on the port by other means is left untouched while
+                          the field is unset.
+                        format: int32
+                        maximum: 4094
+                        minimum: 1
+                        type: integer
                     required:
                     - lifecycle
                     type: object
