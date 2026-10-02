@@ -116,6 +116,11 @@ func validateL3VNIDelete(_ *v1alpha1.L3VNI) error {
 }
 
 func validateL3VNI(l3vni *v1alpha1.L3VNI) error {
+	// The object's own fields count whether or not it selects a node today.
+	if _, err := conversion.FilterValidL3VNIs([]v1alpha1.L3VNI{*l3vni}); err != nil {
+		return err
+	}
+
 	existingL3VNIs, err := getL3VNIs()
 	if err != nil {
 		return err
@@ -150,11 +155,9 @@ func validateL3VNI(l3vni *v1alpha1.L3VNI) error {
 		return err
 	}
 
-	if err := conversion.ValidateOverlayResourcesForNodes(
-		nodeList.Items,
-		toValidateL2.Items,
-		toValidate,
-		l3vpnList.Items,
+	if err := overlayWriteError(nodeList.Items,
+		conversion.APIConfigData{L2VNIs: toValidateL2.Items, L3VNIs: existingL3VNIs.Items, L3VPNs: l3vpnList.Items},
+		conversion.APIConfigData{L2VNIs: toValidateL2.Items, L3VNIs: toValidate, L3VPNs: l3vpnList.Items},
 	); err != nil {
 		return fmt.Errorf("validation failed: %w", err)
 	}

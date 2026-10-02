@@ -312,6 +312,7 @@ func TestValidateL3VNIUpdate(t *testing.T) {
 					Name:      "newL3VNI",
 				},
 				Spec: v1alpha1.L3VNISpec{
+					VRF: "vrfa",
 					HostSession: &v1alpha1.HostSession{
 						LocalCIDRs: []string{"192.0.2.0/24"},
 					},
@@ -323,6 +324,7 @@ func TestValidateL3VNIUpdate(t *testing.T) {
 					Name:      "newL3VNI",
 				},
 				Spec: v1alpha1.L3VNISpec{
+					VRF: "vrfa",
 					HostSession: &v1alpha1.HostSession{
 						LocalCIDRs: []string{"192.0.2.0/24"},
 					},

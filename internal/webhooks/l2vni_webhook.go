@@ -109,6 +109,13 @@ func validateL2VNIDelete(_ *v1alpha1.L2VNI) error {
 }
 
 func validateL2VNI(l2vni *v1alpha1.L2VNI) error {
+	// The object's own fields count whether or not it selects a node today: an
+	// L2VNI that selects none yet would otherwise fail on its first node only.
+	// (Its nodeSelector is checked for every object below, node or not.)
+	if _, err := conversion.FilterValidL2VNIs([]v1alpha1.L2VNI{*l2vni}); err != nil {
+		return err
+	}
+
 	existingL2VNIs, err := getL2VNIs()
 	if err != nil {
 		return err
@@ -143,8 +150,10 @@ func validateL2VNI(l2vni *v1alpha1.L2VNI) error {
 		return err
 	}
 
-	if err := conversion.ValidateOverlayResourcesForNodes(nodeList.Items, toValidate,
-		toValidateL3.Items, l3vpnList.Items); err != nil {
+	if err := overlayWriteError(nodeList.Items,
+		conversion.APIConfigData{L2VNIs: existingL2VNIs.Items, L3VNIs: toValidateL3.Items, L3VPNs: l3vpnList.Items},
+		conversion.APIConfigData{L2VNIs: toValidate, L3VNIs: toValidateL3.Items, L3VPNs: l3vpnList.Items},
+	); err != nil {
 		return fmt.Errorf("validation failed: %w", err)
 	}
 

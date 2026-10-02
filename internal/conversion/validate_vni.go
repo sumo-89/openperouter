@@ -14,6 +14,7 @@ import (
 	"strings"
 
 	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/utils/ptr"
 
@@ -164,84 +165,132 @@ func validateL2VNI(l2Vni v1alpha1.L2VNI) error {
 }
 
 // ValidateOverlayResourcesForNodes validates that the VNI / VPN information as a whole is correct, per Node.
+// It validates every node the way the node's own pass would, oldest object
+// first, and goes on past an object that fails. The result joins one error per
+// failing object and node, each wrapping that object's *openpeerrors.ResourceError,
+// so a caller can tell which object failed where.
 func ValidateOverlayResourcesForNodes(nodes []corev1.Node, l2vnis []v1alpha1.L2VNI, l3vnis []v1alpha1.L3VNI,
 	l3vpns []v1alpha1.L3VPN) error {
-	var errs []error
+	ordered := APIConfigData{
+		L2VNIs: slices.Clone(l2vnis),
+		L3VNIs: slices.Clone(l3vnis),
+		L3VPNs: slices.Clone(l3vpns),
+	}
+	OrderOldestFirst(&ordered)
+
+	errs := make([]error, 0, len(nodes))
+	ordered.L3VNIs, errs = withParsableSelectors(errs, openpeerrors.KindL3VNI, ordered.L3VNIs,
+		func(o v1alpha1.L3VNI) (*metav1.LabelSelector, string) { return o.Spec.NodeSelector, o.Name })
+	ordered.L3VPNs, errs = withParsableSelectors(errs, openpeerrors.KindL3VPN, ordered.L3VPNs,
+		func(o v1alpha1.L3VPN) (*metav1.LabelSelector, string) { return o.Spec.NodeSelector, o.Name })
+	ordered.L2VNIs, errs = withParsableSelectors(errs, openpeerrors.KindL2VNI, ordered.L2VNIs,
+		func(o v1alpha1.L2VNI) (*metav1.LabelSelector, string) { return o.Spec.NodeSelector, o.Name })
+
 	for _, node := range nodes {
-		if err := validateOverlayResourcesForNode(node, l2vnis, l3vnis, l3vpns); err != nil {
-			errs = append(errs, err)
-		}
+		errs = append(errs, validateOverlayResourcesForNode(node, ordered.L2VNIs, ordered.L3VNIs, ordered.L3VPNs)...)
 	}
 	return errors.Join(errs...)
 }
 
+// withParsableSelectors leaves out the items whose nodeSelector cannot be
+// parsed, and adds a resource error for each of them to errs. Such an item
+// selects no node; without this step it would fail the filter of every node.
+func withParsableSelectors[T any](errs []error, kind v1alpha1.FailedResourceKind, items []T,
+	selectorAndName func(T) (*metav1.LabelSelector, string)) ([]T, []error) {
+	valid := make([]T, 0, len(items))
+	for _, item := range items {
+		selector, name := selectorAndName(item)
+		if selector != nil {
+			if _, err := metav1.LabelSelectorAsSelector(selector); err != nil {
+				errs = append(errs, &openpeerrors.ResourceError{
+					Obj: v1alpha1.FailedResource{
+						Kind: kind, Name: name, Reason: v1alpha1.FailedResourceReasonValidationFailed,
+						Message: fmt.Sprintf("invalid nodeSelector: %s", err),
+					},
+				})
+				continue
+			}
+		}
+		valid = append(valid, item)
+	}
+	return valid, errs
+}
+
 func validateOverlayResourcesForNode(node corev1.Node, l2vnis []v1alpha1.L2VNI, l3vnis []v1alpha1.L3VNI,
-	l3vpns []v1alpha1.L3VPN) error {
+	l3vpns []v1alpha1.L3VPN) []error {
+	var errs []error
+	// stage adds every failure of one validation step on its own, with the
+	// step and the node, so that one failing object hides no other.
+	stage := func(err error, format string) {
+		for _, leaf := range resourceErrorLeaves(err) {
+			errs = append(errs, fmt.Errorf(format+" for node %q: %w", node.Name, leaf))
+		}
+	}
+
 	filteredL3VNIs, err := filter.L3VNIsForNode(&node, l3vnis)
 	if err != nil {
-		return fmt.Errorf("failed to filter l3vnis for node %q: %w", node.Name, err)
+		return append(errs, fmt.Errorf("failed to filter l3vnis for node %q: %w", node.Name, err))
 	}
 
 	filteredL3VPNs, err := filter.L3VPNsForNode(&node, l3vpns)
 	if err != nil {
-		return fmt.Errorf("failed to filter l3vnis for node %q: %w", node.Name, err)
+		return append(errs, fmt.Errorf("failed to filter l3vnis for node %q: %w", node.Name, err))
 	}
 
 	filteredL2VNIs, err := filter.L2VNIsForNode(&node, l2vnis)
 	if err != nil {
-		return fmt.Errorf("failed to filter l2vnis for node %q: %w", node.Name, err)
+		return append(errs, fmt.Errorf("failed to filter l2vnis for node %q: %w", node.Name, err))
 	}
 
 	validL3VNIs, err := FilterValidL3VNIs(filteredL3VNIs)
-	if err != nil {
-		return fmt.Errorf("failed to validate l3vnis for node %q: %w", node.Name, err)
-	}
+	stage(err, "failed to validate l3vnis")
 
 	validL3VPNs, err := FilterValidL3VPNs(filteredL3VPNs)
-	if err != nil {
-		return fmt.Errorf("failed to validate l3vpns for node %q: %w", node.Name, err)
-	}
+	stage(err, "failed to validate l3vpns")
 
 	validL2VNIs, err := FilterValidL2VNIs(filteredL2VNIs)
-	if err != nil {
-		return fmt.Errorf("failed to validate l2vnis for node %q: %w", node.Name, err)
-	}
+	stage(err, "failed to validate l2vnis")
 
 	var allocatedRDAssignedNumberToOwner map[int32]string
 	validL3VNIs, allocatedRDAssignedNumberToOwner, err = FilterUniqueL3VNIs(validL3VNIs)
-	if err != nil {
-		return fmt.Errorf("duplicate L3VNIs found for node %q: %w", node.Name, err)
-	}
+	stage(err, "duplicate L3VNIs found")
 
 	var allocatedRDAssignedNumberToVPN map[int32]string
 	validL3VPNs, allocatedRDAssignedNumberToVPN, err = FilterUniqueL3VPNs(validL3VPNs, allocatedRDAssignedNumberToOwner)
-	if err != nil {
-		return fmt.Errorf("duplicate L3VPNs found for node %q: %w", node.Name, err)
-	}
+	stage(err, "duplicate L3VPNs found")
 	maps.Copy(allocatedRDAssignedNumberToOwner, allocatedRDAssignedNumberToVPN)
 
 	validL2VNIs, err = FilterUniqueL2VNIs(validL2VNIs, allocatedRDAssignedNumberToOwner)
-	if err != nil {
-		return fmt.Errorf("duplicate VNIs found in L2VNIs for node %q: %w", node.Name, err)
-	}
+	stage(err, "duplicate VNIs found in L2VNIs")
 
 	var vrfToVNI map[string]types.NamespacedName
 	validL3VNIs, vrfToVNI, err = FilterUniqueVRFsForL3VNIs(validL3VNIs)
-	if err != nil {
-		return fmt.Errorf("duplicate L3VNIs found in VRFs for node %q: %w", node.Name, err)
-	}
+	stage(err, "duplicate L3VNIs found in VRFs")
 
 	validL3VPNs, err = FilterUniqueVRFsForL3VPNs(validL3VPNs, vrfToVNI)
-	if err != nil {
-		return fmt.Errorf("duplicate L3VPNs found in VRFs for node %q: %w", node.Name, err)
-	}
+	stage(err, "duplicate L3VPNs found in VRFs")
 
 	_, _, _, err = FilterValidVRFSubnets(validL3VNIs, validL3VPNs, validL2VNIs)
-	if err != nil {
-		return fmt.Errorf("subnet overlaps found in VRFs for node %q: %w", node.Name, err)
-	}
+	stage(err, "subnet overlaps found in VRFs")
 
-	return nil
+	return errs
+}
+
+// resourceErrorLeaves returns the leaves of a joined error: each
+// *openpeerrors.ResourceError on its own, and anything else as it is.
+func resourceErrorLeaves(err error) []error {
+	if err == nil {
+		return nil
+	}
+	joined, ok := err.(interface{ Unwrap() []error })
+	if !ok {
+		return []error{err}
+	}
+	var leaves []error
+	for _, e := range joined.Unwrap() {
+		leaves = append(leaves, resourceErrorLeaves(e)...)
+	}
+	return leaves
 }
 
 // FilterUniqueVRFsForL3VNIs checks VRF uniqueness among L3VNIs and returns the valid

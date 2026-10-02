@@ -104,6 +104,11 @@ func validateL3VPNDelete(_ *v1alpha1.L3VPN) error {
 
 // validateL3VPN contains validation logic that is common to the Create and Update operations.
 func validateL3VPN(l3vpn *v1alpha1.L3VPN) error {
+	// The object's own fields count whether or not it selects a node today.
+	if _, err := conversion.FilterValidL3VPNs([]v1alpha1.L3VPN{*l3vpn}); err != nil {
+		return err
+	}
+
 	existingL3VPNs, err := getL3VPNs()
 	if err != nil {
 		return err
@@ -147,11 +152,9 @@ func validateL3VPN(l3vpn *v1alpha1.L3VPN) error {
 		return err
 	}
 
-	if err := conversion.ValidateOverlayResourcesForNodes(
-		nodeList.Items,
-		l2vniList.Items,
-		l3vniList.Items,
-		toValidate,
+	if err := overlayWriteError(nodeList.Items,
+		conversion.APIConfigData{L2VNIs: l2vniList.Items, L3VNIs: l3vniList.Items, L3VPNs: existingL3VPNs.Items},
+		conversion.APIConfigData{L2VNIs: l2vniList.Items, L3VNIs: l3vniList.Items, L3VPNs: toValidate},
 	); err != nil {
 		return fmt.Errorf("validation failed: %w", err)
 	}

@@ -3,12 +3,16 @@
 package tests
 
 import (
+	"time"
+
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 	"github.com/openperouter/openperouter/api/v1alpha1"
 	"github.com/openperouter/openperouter/e2etests/pkg/config"
+	"github.com/openperouter/openperouter/e2etests/pkg/k8s"
 	"github.com/openperouter/openperouter/e2etests/pkg/k8sclient"
 	"github.com/openperouter/openperouter/e2etests/pkg/openperouter"
+	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	clientset "k8s.io/client-go/kubernetes"
 )
@@ -454,6 +458,69 @@ var _ = Describe("Webhooks", func() {
 				L2VNIs: []v1alpha1.L2VNI{l2vni},
 			})
 			Expect(err).NotTo(HaveOccurred())
+		})
+	})
+
+	Context("when a node label brings two conflicting L2VNIs onto a node", func() {
+		var labelled corev1.Node
+
+		AfterEach(func() {
+			Expect(k8s.UnlabelNodes(cs, labelled)).To(Succeed())
+		})
+
+		It("leaves out only the newer one and still admits unrelated writes", func() {
+			dormant := &metav1.LabelSelector{MatchLabels: map[string]string{"openpe-e2e-conflict": "true"}}
+			l3vni := v1alpha1.L3VNI{
+				ObjectMeta: metav1.ObjectMeta{Name: "test-vni-1", Namespace: openperouter.Namespace},
+				Spec:       v1alpha1.L3VNISpec{VRF: "test-vrf-1", VNI: 100, VXLanPort: new(int32(4789))},
+			}
+			incumbent := v1alpha1.L2VNI{
+				ObjectMeta: metav1.ObjectMeta{Name: "incumbent", Namespace: openperouter.Namespace},
+				Spec: v1alpha1.L2VNISpec{
+					VNI: 211, RoutingDomain: l3vniRoutingDomain("test-vni-1"), VXLanPort: new(int32(4789)),
+					GatewayIPs: []string{"192.168.124.1/24"}, NodeSelector: dormant,
+				},
+			}
+			newcomer := v1alpha1.L2VNI{
+				ObjectMeta: metav1.ObjectMeta{Name: "newcomer", Namespace: openperouter.Namespace},
+				Spec: v1alpha1.L2VNISpec{
+					VNI: 212, RoutingDomain: l3vniRoutingDomain("test-vni-1"), VXLanPort: new(int32(4789)),
+					GatewayIPs: []string{"192.168.124.129/25"}, NodeSelector: dormant,
+				},
+			}
+			By("creating the L3VNI and the incumbent, then the overlapping newcomer, while neither selects a node")
+			Expect(Updater.Update(config.Resources{L3VNIs: []v1alpha1.L3VNI{l3vni}})).To(Succeed())
+			Expect(Updater.Update(config.Resources{L2VNIs: []v1alpha1.L2VNI{incumbent}})).To(Succeed())
+			// Creation timestamps have a resolution of one second.
+			time.Sleep(1100 * time.Millisecond)
+			Expect(Updater.Update(config.Resources{L2VNIs: []v1alpha1.L2VNI{newcomer}})).To(Succeed())
+
+			By("labelling a node, which no admission sees")
+			nodes, err := k8s.GetNodes(cs)
+			Expect(err).NotTo(HaveOccurred())
+			labelled = nodes[0]
+			Expect(k8s.LabelNodes(cs, dormant.MatchLabels, labelled)).To(Succeed())
+
+			By("checking that the node leaves out the newcomer only")
+			Eventually(func(g Gomega) {
+				nodeStatus, err := openperouter.GetNodeStatus(Updater.Client(), labelled.Name)
+				g.Expect(err).NotTo(HaveOccurred())
+				var failed []string
+				for _, f := range nodeStatus.Status.FailedResources {
+					failed = append(failed, string(f.Kind)+"/"+f.Name)
+				}
+				g.Expect(failed).To(ConsistOf("L2VNI/newcomer"))
+			}).WithTimeout(2 * time.Minute).WithPolling(2 * time.Second).Should(Succeed())
+
+			By("creating an unrelated L2VNI")
+			bystander := v1alpha1.L2VNI{
+				ObjectMeta: metav1.ObjectMeta{Name: "bystander", Namespace: openperouter.Namespace},
+				Spec: v1alpha1.L2VNISpec{
+					VNI: 213, RoutingDomain: l3vniRoutingDomain("test-vni-1"), VXLanPort: new(int32(4789)),
+					GatewayIPs: []string{"192.168.125.1/24"},
+				},
+			}
+			Expect(Updater.Update(config.Resources{L2VNIs: []v1alpha1.L2VNI{bystander}})).To(Succeed())
 		})
 	})
 

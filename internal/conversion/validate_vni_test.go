@@ -1206,6 +1206,7 @@ func TestValidateOverlayResourcesForNodes(t *testing.T) {
 			},
 			wantErrStr: "duplicate L3VPNs found in VRFs for node \"node1\": " +
 				"L3VPN/vpn1: conflict with L3VNI \"test/l3vni1\" detected in VRF \"red\"\n" +
+				"duplicate L3VPNs found in VRFs for node \"node1\": " +
 				"L3VPN/vpn2: conflict with L3VNI \"test/l3vni1\" detected in VRF \"red\"",
 		},
 		{
