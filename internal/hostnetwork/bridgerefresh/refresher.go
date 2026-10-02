@@ -9,8 +9,6 @@ import (
 	"time"
 
 	"github.com/openperouter/openperouter/internal/hostnetwork"
-	"github.com/openperouter/openperouter/internal/netnamespace"
-	"github.com/vishvananda/netns"
 )
 
 const (
@@ -24,13 +22,13 @@ type StartOptions struct {
 }
 
 // BridgeRefresher manages neighbor refresh for an L2VNI bridge.
-// It periodically sends ICMP pings to STALE neighbors to prevent
-// EVPN Type-2 routes from being withdrawn and to force STALE
-// neighbors to FAILED state in case the entry is really STALE.
+// It makes sure that the STALE neighbors on the bridge are pinged once per
+// refresh period, to prevent EVPN Type-2 routes from being withdrawn and to
+// force STALE neighbors to FAILED state in case the entry is really STALE.
 //
-// The refresher opens the netns fd ephemerally on each tick (open,
-// use, close) rather than holding a persistent fd. This prevents
-// zombie network namespaces when the netns is deleted externally.
+// A BridgeRefresher runs no loop of its own: Start adds its bridge to the
+// sweep of its namespace and period, which lists the neighbors of the whole
+// namespace once per tick for all of its bridges (see sweep.go).
 type BridgeRefresher struct {
 	bridgeName    string // e.g., "br-pe-110"
 	namespace     string // Path to network namespace
@@ -43,7 +41,7 @@ type BridgeRefresher struct {
 }
 
 // New creates a new BridgeRefresher for an L2VNI.
-// Call Start to begin the refresh loop.
+// Call Start to begin refreshing.
 func New(params hostnetwork.L2VNIParams, opts StartOptions) (*BridgeRefresher, error) {
 	refreshPeriod := DefaultRefreshPeriod
 	if opts.RefreshPeriod > 0 {
@@ -59,19 +57,21 @@ func New(params hostnetwork.L2VNIParams, opts StartOptions) (*BridgeRefresher, e
 	return refresher, nil
 }
 
-// Start begins the refresh loop.
-// The refresher runs in the background and periodically sends ICMP pings
-// to STALE neighbors to prevent route withdrawal.
+// Start adds the bridge to the sweep of its namespace until Stop is called
+// or ctx is cancelled.
 func (r *BridgeRefresher) Start(ctx context.Context) {
 	ctx, r.cancel = context.WithCancel(ctx)
-	r.wg.Go(func() {
-		r.run(ctx)
+	join(r)
+	r.wg.Add(1)
+	context.AfterFunc(ctx, func() {
+		defer r.wg.Done()
+		leave(r)
 	})
 
 	slog.Info("started bridge refresher", "bridge", r.bridgeName, "vni", r.vni)
 }
 
-// Stop gracefully stops the refresher and waits for it to finish.
+// Stop removes the bridge from its sweep and waits until that is done.
 // It is safe to call multiple times.
 func (r *BridgeRefresher) Stop() {
 	r.stopOnce.Do(func() {
@@ -79,58 +79,4 @@ func (r *BridgeRefresher) Stop() {
 		r.wg.Wait()
 		slog.Info("stopped bridge refresher", "bridge", r.bridgeName)
 	})
-}
-
-// run is the main refresh loop.
-func (r *BridgeRefresher) run(ctx context.Context) {
-	ticker := time.NewTicker(r.refreshPeriod)
-	defer ticker.Stop()
-
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case <-ticker.C:
-			r.refresh()
-		}
-	}
-}
-
-// refresh performs a single refresh cycle.
-func (r *BridgeRefresher) refresh() {
-	ns, err := netns.GetFromPath(r.namespace)
-	if err != nil {
-		slog.Debug("failed to get namespace for refresh", "namespace", r.namespace, "error", err)
-		return
-	}
-	defer func() {
-		if err := ns.Close(); err != nil {
-			slog.Debug("failed to close namespace", "namespace", r.namespace, "error", err)
-		}
-	}()
-
-	if err := netnamespace.In(ns, func() error {
-		r.refreshStaleNeighbors()
-		return nil
-	}); err != nil {
-		slog.Debug("failed to execute refresh in namespace", "namespace", r.namespace, "error", err)
-	}
-}
-
-// refreshStaleNeighbors sends ICMP pings to all STALE neighbors on the bridge.
-func (r *BridgeRefresher) refreshStaleNeighbors() {
-	slog.Debug("refreshing stale neighbors", "bridge", r.bridgeName)
-
-	neighbors, err := r.listStaleNeighbors()
-	if err != nil {
-		slog.Debug("failed to list stale neighbors", "bridge", r.bridgeName, "error", err)
-		return
-	}
-
-	for _, neigh := range neighbors {
-		slog.Debug("pinging stale neighbor", "ip", neigh.IP, "bridge", r.bridgeName)
-		if err := r.sendPing(neigh.IP); err != nil {
-			slog.Debug("failed to ping neighbor", "ip", neigh.IP, "bridge", r.bridgeName, "error", err)
-		}
-	}
 }
