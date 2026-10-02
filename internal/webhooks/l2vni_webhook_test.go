@@ -318,9 +318,9 @@ func TestValidateL2VNICreate(t *testing.T) {
 					GatewayIPs: []string{"192.0.2.0/24"},
 				},
 			},
-			errorString: "subnet overlap in VRF \"vrfa\": " +
-				"IPNet 192.0.2.0/24 (L3VNI default/existingL3VNI) overlaps with IPNet " +
-				"192.0.2.0/24 (L2VNI default/newL2VNI)",
+			errorString: "subnet overlaps found in VRFs for node \"node1\": L2VNI/newL2VNI: subnet overlap in VRF \"vrfa\": " +
+				"IPNet 192.0.2.0/24 (L2VNI default/newL2VNI) overlaps with IPNet " +
+				"192.0.2.0/24 (L3VNI default/existingL3VNI)",
 		},
 	}
 	for _, tc := range tcs {

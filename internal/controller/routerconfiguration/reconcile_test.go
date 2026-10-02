@@ -502,7 +502,7 @@ func TestReconcilePerResourceErrors(t *testing.T) {
 			},
 		},
 		{
-			name: "VRF subnet overlap reports all resources in failed VRF",
+			name: "VRF subnet overlap reports and leaves out only the later L2VNI",
 			l3VNIs: []v1alpha1.L3VNI{
 				l3VNI("good-l3", "vrfGood", 100),
 				l3VNI("bad-l3", "vrfBad", 200),
@@ -513,24 +513,22 @@ func TestReconcilePerResourceErrors(t *testing.T) {
 				l2VNIWithGateway("bad-l2-2", l3vniRoutingDomain("bad-l3"), 500, []string{"10.0.2.100/24"}),
 			},
 			expectedFailures: []v1alpha1.FailedResource{
-				{Kind: openpeerrors.KindL3VNI, Name: "bad-l3", Reason: v1alpha1.FailedResourceReasonValidationFailed,
-					Message: `subnet overlap in VRF "vrfBad": IPNet 10.0.2.0/24 (L2VNI /bad-l2-2) overlaps with IPNet 10.0.2.0/24 (L2VNI /bad-l2-1)`},
-				{Kind: openpeerrors.KindL2VNI, Name: "bad-l2-1", Reason: v1alpha1.FailedResourceReasonValidationFailed,
-					Message: `subnet overlap in VRF "vrfBad": IPNet 10.0.2.0/24 (L2VNI /bad-l2-2) overlaps with IPNet 10.0.2.0/24 (L2VNI /bad-l2-1)`},
 				{Kind: openpeerrors.KindL2VNI, Name: "bad-l2-2", Reason: v1alpha1.FailedResourceReasonValidationFailed,
 					Message: `subnet overlap in VRF "vrfBad": IPNet 10.0.2.0/24 (L2VNI /bad-l2-2) overlaps with IPNet 10.0.2.0/24 (L2VNI /bad-l2-1)`},
 			},
 			wantConfig: conversion.APIConfigData{
 				L3VNIs: []v1alpha1.L3VNI{
+					l3VNI("bad-l3", "vrfBad", 200),
 					l3VNI("good-l3", "vrfGood", 100),
 				},
 				L2VNIs: []v1alpha1.L2VNI{
+					l2VNIWithGateway("bad-l2-1", l3vniRoutingDomain("bad-l3"), 400, []string{"10.0.2.1/24"}),
 					l2VNIWithGateway("good-l2", l3vniRoutingDomain("good-l3"), 300, []string{"10.0.1.1/24"}),
 				},
 			},
 		},
 		{
-			name:      "VRF subnet overlap reports all resources in failed VRF (L3VPN)",
+			name:      "VRF subnet overlap reports and leaves out only the later L2VNI (L3VPN)",
 			underlays: srv6Underlays(),
 			l3VPNs: []v1alpha1.L3VPN{
 				l3VPN("good-l3", "vrfGood", 100),
@@ -542,19 +540,17 @@ func TestReconcilePerResourceErrors(t *testing.T) {
 				l2VNIWithGateway("bad-l2-2", l3vpnRoutingDomain("bad-l3"), 500, []string{"10.0.2.100/24"}),
 			},
 			expectedFailures: []v1alpha1.FailedResource{
-				{Kind: openpeerrors.KindL3VPN, Name: "bad-l3", Reason: v1alpha1.FailedResourceReasonValidationFailed,
-					Message: `subnet overlap in VRF "vrfBad": IPNet 10.0.2.0/24 (L2VNI /bad-l2-2) overlaps with IPNet 10.0.2.0/24 (L2VNI /bad-l2-1)`},
-				{Kind: openpeerrors.KindL2VNI, Name: "bad-l2-1", Reason: v1alpha1.FailedResourceReasonValidationFailed,
-					Message: `subnet overlap in VRF "vrfBad": IPNet 10.0.2.0/24 (L2VNI /bad-l2-2) overlaps with IPNet 10.0.2.0/24 (L2VNI /bad-l2-1)`},
 				{Kind: openpeerrors.KindL2VNI, Name: "bad-l2-2", Reason: v1alpha1.FailedResourceReasonValidationFailed,
 					Message: `subnet overlap in VRF "vrfBad": IPNet 10.0.2.0/24 (L2VNI /bad-l2-2) overlaps with IPNet 10.0.2.0/24 (L2VNI /bad-l2-1)`},
 			},
 			wantConfig: conversion.APIConfigData{
 				Underlays: srv6Underlays(),
 				L3VPNs: []v1alpha1.L3VPN{
+					l3VPN("bad-l3", "vrfBad", 200),
 					l3VPN("good-l3", "vrfGood", 100),
 				},
 				L2VNIs: []v1alpha1.L2VNI{
+					l2VNIWithGateway("bad-l2-1", l3vpnRoutingDomain("bad-l3"), 400, []string{"10.0.2.1/24"}),
 					l2VNIWithGateway("good-l2", l3vpnRoutingDomain("good-l3"), 300, []string{"10.0.1.1/24"}),
 				},
 			},

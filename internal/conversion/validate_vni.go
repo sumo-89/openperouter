@@ -3,11 +3,11 @@
 package conversion
 
 import (
-	"bytes"
 	"errors"
 	"fmt"
 	"maps"
 	"net"
+	"net/netip"
 	"regexp"
 	"slices"
 	"strconv"
@@ -272,20 +272,24 @@ func FilterUniqueVRFsForL3VNIs(l3vnis []v1alpha1.L3VNI) ([]v1alpha1.L3VNI, map[s
 }
 
 // FilterValidVRFSubnets checks for subnet overlaps per VRF and returns valid
-// L3VNIs, valid L3VPNs, valid L2VNIs, and per-resource errors. Resources in VRFs with
-// overlapping subnets are excluded.
+// L3VNIs, valid L3VPNs, valid L2VNIs, and per-resource errors. Each object is
+// checked against the subnets of its VRF that were accepted before it, and an
+// object whose subnet overlaps one of them is left out on its own: the rest of
+// the VRF stays. The L3VNI or L3VPN that owns the VRF goes first, because
+// leaving it out would take every L2VNI of the VRF with it; the L2VNIs follow
+// in the order given, which OrderOldestFirst makes the older first. An L2VNI
+// with an IPv4 and an IPv6 gateway is left out as a whole if either overlaps,
+// and then blocks nothing.
 func FilterValidVRFSubnets(l3Vnis []v1alpha1.L3VNI, l3Vpns []v1alpha1.L3VPN,
 	l2Vnis []v1alpha1.L2VNI) ([]v1alpha1.L3VNI, []v1alpha1.L3VPN, []v1alpha1.L2VNI, error) {
 	reason := v1alpha1.FailedResourceReasonValidationFailed
-	failedVRFs := ValidateVRFSubnets(l2Vnis, l3Vnis, l3Vpns)
-	if len(failedVRFs) == 0 {
-		return l3Vnis, l3Vpns, l2Vnis, nil
-	}
-
 	var allErrors []error
+	claimed := vrfSubnets{}
+
 	var resultL3VNI []v1alpha1.L3VNI
 	for _, l3 := range l3Vnis {
-		if err, failed := failedVRFs[l3.Spec.VRF]; failed {
+		source := fmt.Sprintf("L3VNI %s", types.NamespacedName{Namespace: l3.Namespace, Name: l3.Name})
+		if err := claimed.claim(l3.Spec.VRF, source, v4SubnetForL3(l3), v6SubnetForL3(l3)); err != nil {
 			allErrors = append(allErrors, &openpeerrors.ResourceError{
 				Obj: v1alpha1.FailedResource{
 					Kind: "L3VNI", Name: l3.Name, Reason: reason, Message: err.Error(),
@@ -298,7 +302,8 @@ func FilterValidVRFSubnets(l3Vnis []v1alpha1.L3VNI, l3Vpns []v1alpha1.L3VPN,
 
 	var resultL3VPN []v1alpha1.L3VPN
 	for _, l3 := range l3Vpns {
-		if err, failed := failedVRFs[l3.Spec.VRF]; failed {
+		source := fmt.Sprintf("L3VPN %s", types.NamespacedName{Namespace: l3.Namespace, Name: l3.Name})
+		if err := claimed.claim(l3.Spec.VRF, source, v4SubnetForL3VPN(l3), v6SubnetForL3VPN(l3)); err != nil {
 			allErrors = append(allErrors, &openpeerrors.ResourceError{
 				Obj: v1alpha1.FailedResource{
 					Kind: "L3VPN", Name: l3.Name, Reason: reason, Message: err.Error(),
@@ -313,74 +318,101 @@ func FilterValidVRFSubnets(l3Vnis []v1alpha1.L3VNI, l3Vpns []v1alpha1.L3VPN,
 	var resultL2 []v1alpha1.L2VNI
 	for _, l2 := range l2Vnis {
 		vrfName := resolveVRFForL2VNI(l2, vrfMap)
-		if vrfName != "" && failedVRFs[vrfName] != nil {
-			allErrors = append(allErrors, &openpeerrors.ResourceError{
-				Obj: v1alpha1.FailedResource{
-					Kind: "L2VNI", Name: l2.Name, Reason: reason, Message: failedVRFs[vrfName].Error(),
-				},
-			})
-			continue
+		if vrfName != "" {
+			source := fmt.Sprintf("L2VNI %s", types.NamespacedName{Namespace: l2.Namespace, Name: l2.Name})
+			if err := claimed.claim(vrfName, source, v4SubnetForL2(l2), v6SubnetForL2(l2)); err != nil {
+				allErrors = append(allErrors, &openpeerrors.ResourceError{
+					Obj: v1alpha1.FailedResource{
+						Kind: "L2VNI", Name: l2.Name, Reason: reason, Message: err.Error(),
+					},
+				})
+				continue
+			}
 		}
 		resultL2 = append(resultL2, l2)
 	}
 
+	if len(allErrors) == 0 {
+		return l3Vnis, l3Vpns, l2Vnis, nil
+	}
 	return resultL3VNI, resultL3VPN, resultL2, errors.Join(allErrors...)
 }
 
-// ValidateVRFSubnets checks for subnet overlaps per VRF and returns a map of
-// VRF name to error for each VRF that has overlapping subnets.
-func ValidateVRFSubnets(l2Vnis []v1alpha1.L2VNI, l3Vnis []v1alpha1.L3VNI, l3Vpns []v1alpha1.L3VPN) map[string]error {
-	vrfMap := createVRFMap(l3Vnis, l3Vpns)
-	v4SubnetsForVRF := map[string]subnets{}
-	v6SubnetsForVRF := map[string]subnets{}
-	for _, l2vni := range l2Vnis {
-		vrfName := resolveVRFForL2VNI(l2vni, vrfMap)
-		if vrfName == "" {
+// vrfSubnets holds, per VRF and address family, the subnets accepted so far.
+// Each list is sorted by first address, and its subnets are pairwise
+// disjoint.
+type vrfSubnets map[vrfFamily]claimedSubnets
+
+type vrfFamily struct {
+	vrf string
+	v6  bool
+}
+
+type claimedSubnet struct {
+	prefix netip.Prefix
+	ipnet  *net.IPNet
+	source string
+}
+
+type claimedSubnets []claimedSubnet
+
+// claim accepts the subnets of one object (nil ones are skipped) if none of
+// them overlaps a subnet accepted before in the VRF, and returns an error
+// naming the first overlap otherwise. Either all of the object's subnets are
+// accepted or none is.
+func (c vrfSubnets) claim(vrf, source string, ipnets ...*net.IPNet) error {
+	type pending struct {
+		key   vrfFamily
+		index int
+		entry claimedSubnet
+	}
+	var accepted []pending
+	for _, ipnet := range ipnets {
+		if ipnet == nil {
 			continue
 		}
-		source := fmt.Sprintf("L2VNI %s", types.NamespacedName{Namespace: l2vni.Namespace, Name: l2vni.Name})
-		if subnet := v4SubnetForL2(l2vni); subnet != nil {
-			v4SubnetsForVRF[vrfName] = append(v4SubnetsForVRF[vrfName], subnetWithSource{source, subnet})
+		prefix, ok := prefixOf(ipnet)
+		if !ok {
+			continue
 		}
-		if subnet := v6SubnetForL2(l2vni); subnet != nil {
-			v6SubnetsForVRF[vrfName] = append(v6SubnetsForVRF[vrfName], subnetWithSource{source, subnet})
+		key := vrfFamily{vrf: vrf, v6: prefix.Addr().Is6()}
+		index, other, overlaps := c[key].find(prefix)
+		if overlaps {
+			return fmt.Errorf("subnet overlap in VRF %q: IPNet %s (%s) overlaps with IPNet %s (%s)",
+				vrf, ipnet, source, other.ipnet, other.source)
 		}
+		accepted = append(accepted, pending{key, index, claimedSubnet{prefix, ipnet, source}})
 	}
-	for _, l3vni := range l3Vnis {
-		vrfName := l3vni.Spec.VRF
-		source := fmt.Sprintf("L3VNI %s", types.NamespacedName{Namespace: l3vni.Namespace, Name: l3vni.Name})
-		if subnet := v4SubnetForL3(l3vni); subnet != nil {
-			v4SubnetsForVRF[vrfName] = append(v4SubnetsForVRF[vrfName], subnetWithSource{source, subnet})
-		}
-		if subnet := v6SubnetForL3(l3vni); subnet != nil {
-			v6SubnetsForVRF[vrfName] = append(v6SubnetsForVRF[vrfName], subnetWithSource{source, subnet})
-		}
+	for _, p := range accepted {
+		c[p.key] = slices.Insert(c[p.key], p.index, p.entry)
 	}
-	for _, l3vpn := range l3Vpns {
-		vrfName := l3vpn.Spec.VRF
-		source := fmt.Sprintf("L3VPN %s", types.NamespacedName{Namespace: l3vpn.Namespace, Name: l3vpn.Name})
-		if subnet := v4SubnetForL3VPN(l3vpn); subnet != nil {
-			v4SubnetsForVRF[vrfName] = append(v4SubnetsForVRF[vrfName], subnetWithSource{source, subnet})
-		}
-		if subnet := v6SubnetForL3VPN(l3vpn); subnet != nil {
-			v6SubnetsForVRF[vrfName] = append(v6SubnetsForVRF[vrfName], subnetWithSource{source, subnet})
-		}
-	}
+	return nil
+}
 
-	failedVRFs := map[string]error{}
-	for vrf, subnetList := range v4SubnetsForVRF {
-		subnetList.sort()
-		if err := hasSubnetOverlap(subnetList); err != nil {
-			failedVRFs[vrf] = fmt.Errorf("subnet overlap in VRF %q: %w", vrf, err)
-		}
+// find returns where prefix belongs in the sorted list and, if a subnet of the
+// list overlaps it, that subnet. As the list is disjoint, only the subnets
+// next to that position can overlap: the one before it if it contains the
+// prefix's first address, or the one at it if that starts inside the prefix.
+func (subnets claimedSubnets) find(prefix netip.Prefix) (int, claimedSubnet, bool) {
+	index, _ := slices.BinarySearchFunc(subnets, prefix.Addr(), func(s claimedSubnet, addr netip.Addr) int {
+		return s.prefix.Addr().Compare(addr)
+	})
+	if index < len(subnets) && prefix.Contains(subnets[index].prefix.Addr()) {
+		return index, subnets[index], true
 	}
-	for vrf, subnetList := range v6SubnetsForVRF {
-		subnetList.sort()
-		if err := hasSubnetOverlap(subnetList); err != nil {
-			failedVRFs[vrf] = fmt.Errorf("subnet overlap in VRF %q: %w", vrf, err)
-		}
+	if index > 0 && subnets[index-1].prefix.Contains(prefix.Addr()) {
+		return index, subnets[index-1], true
 	}
-	return failedVRFs
+	return index, claimedSubnet{}, false
+}
+
+func prefixOf(ipnet *net.IPNet) (netip.Prefix, bool) {
+	addr, ok := netip.AddrFromSlice(ipnet.IP)
+	if !ok {
+		return netip.Prefix{}, false
+	}
+	ones, _ := ipnet.Mask.Size()
+	return netip.PrefixFrom(addr.Unmap(), ones).Masked(), true
 }
 
 func cidrsOverlap(cidr1, cidr2 string) (bool, error) {
@@ -537,67 +569,6 @@ func v6SubnetForL3(l3vni v1alpha1.L3VNI) *net.IPNet {
 		return nil
 	}
 	return ipnet
-}
-
-// subnetWithSource holds subnet information for a single IP address family
-// alongside the source for logging.
-type subnetWithSource struct {
-	source string
-	subnet *net.IPNet
-}
-
-type subnets []subnetWithSource
-
-// sort sorts the vniSubnets in place by network address (starting IP), then by prefix length (longer first), then by
-// the source string (prefix length and source string are not relevant for the algorithm itself, but for stable error
-// messages).
-func (vniSubnets subnets) sort() {
-	slices.SortStableFunc(vniSubnets, func(a, b subnetWithSource) int {
-		// Sort by network address first.
-		cmp := bytes.Compare(a.subnet.IP, b.subnet.IP)
-		if cmp != 0 {
-			return cmp
-		}
-		// If network addresses are equal, sort by prefix length (longer first).
-		prefixLengthA, _ := a.subnet.Mask.Size()
-		prefixLengthB, _ := b.subnet.Mask.Size()
-		if prefixLengthA > prefixLengthB {
-			return -1
-		}
-		if prefixLengthA < prefixLengthB {
-			return 1
-		}
-		// Not relevant for the actual algorithm, but needed for stable error messages.
-		if a.source < b.source {
-			return -1
-		}
-		if a.source > b.source {
-			return 1
-		}
-		return 0
-	})
-}
-
-// hasSubnetOverlap takes a vniSubnetsList and checks if any of its subnets overlap. The list must be sorted with sort().
-// The algorithm works by: Iterating through sorted subnets once, checking if each subnet overlaps with the next.
-func hasSubnetOverlap(vniSubnets subnets) error {
-	if len(vniSubnets) <= 1 {
-		return nil
-	}
-
-	// Check for overlaps by comparing each subnet with the next
-	for i := 0; i < len(vniSubnets)-1; i++ {
-		current := vniSubnets[i]
-		next := vniSubnets[i+1]
-
-		// Check if current contains next's first IP (if next is not in current, we know that none of the following
-		// is in current, because all are sorted).
-		if current.subnet.Contains(next.subnet.IP) {
-			return fmt.Errorf("IPNet %s (%s) overlaps with IPNet %s (%s)",
-				next.subnet.String(), next.source, current.subnet.String(), current.source)
-		}
-	}
-	return nil
 }
 
 func ValidateRouteTargets(exportRTs, importRTs []string) error {

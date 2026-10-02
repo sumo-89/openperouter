@@ -31,7 +31,9 @@ type DatapathConfigurator interface {
 func Reconcile(ctx context.Context, apiConfig conversion.APIConfigData, nodeIndex int, logLevel string,
 	frrConfigPath, targetNamespace string, updater frr.ConfigUpdater,
 	datapathConfigurator DatapathConfigurator, frrConfigurator frrConfiguratorType) error {
-	normalizeConfig(&apiConfig)
+	// Oldest first, so that where two objects conflict the filters below keep
+	// the one that was there first and leave out only the other.
+	conversion.OrderOldestFirst(&apiConfig)
 	if err := conversion.ValidateUnderlays(apiConfig.Underlays); err != nil {
 		return fmt.Errorf("failed to validate underlays: %w", err)
 	}
@@ -104,6 +106,7 @@ func Reconcile(ctx context.Context, apiConfig conversion.APIConfigData, nodeInde
 		RawFRRConfigs: apiConfig.RawFRRConfigs,
 		Passwords:     apiConfig.Passwords,
 	}
+	normalizeConfig(&config)
 
 	// The FRR configuration must be applied before the datapath creates the kernel
 	// objects it references. bgpd handles ZEBRA_VNI_ADD in bgp_evpn_local_vni_add(),
@@ -191,7 +194,8 @@ func filterL2VNIsWithInvalidRoutingDomain(
 	return valid, errors.Join(resourceErrors...)
 }
 
-// normalizeConfig sorts resources by namespace/name so validation order is deterministic.
+// normalizeConfig sorts resources by namespace/name, so the configuration that
+// is rendered does not depend on the order the objects were created in.
 func normalizeConfig(config *conversion.APIConfigData) {
 	slices.SortFunc(config.L3VNIs, func(a, b v1alpha1.L3VNI) int {
 		return cmp.Compare(objectKey(&a), objectKey(&b))

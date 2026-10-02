@@ -5,6 +5,7 @@ package conversion
 import (
 	"fmt"
 	"net"
+	"slices"
 	"strings"
 	"testing"
 
@@ -1271,7 +1272,7 @@ func TestValidateOverlayResourcesForNodes(t *testing.T) {
 				},
 			},
 			wantErrStr: "subnet overlaps found in VRFs for node \"node1\": " +
-				"L3VNI/l3vni1: subnet overlap in VRF \"red\": " +
+				"L2VNI/l2vni1: subnet overlap in VRF \"red\": " +
 				"IPNet 10.0.1.0/24 (L2VNI test/l2vni1) overlaps with IPNet 10.0.0.0/16 (L3VNI test/l3vni1)",
 		},
 		{
@@ -1305,7 +1306,7 @@ func TestValidateOverlayResourcesForNodes(t *testing.T) {
 				},
 			},
 			wantErrStr: "subnet overlaps found in VRFs for node \"node1\": " +
-				"L3VPN/vpn1: subnet overlap in VRF \"red\": " +
+				"L2VNI/l2vni1: subnet overlap in VRF \"red\": " +
 				"IPNet 10.0.1.0/24 (L2VNI test/l2vni1) overlaps with IPNet 10.0.0.0/16 (L3VPN test/vpn1)",
 		},
 		{
@@ -1502,7 +1503,7 @@ func TestValidateOverlayResourcesForNodes(t *testing.T) {
 				},
 			},
 			wantErrStr: "subnet overlaps found in VRFs for node \"node1\": " +
-				"L3VNI/l3vni1: " +
+				"L2VNI/l2vni1: " +
 				"subnet overlap in VRF \"red\": " +
 				"IPNet 2001:db8:1::/64 (L2VNI test/l2vni1) overlaps with IPNet 2001:db8::/32 (L3VNI test/l3vni1)",
 		},
@@ -1560,10 +1561,11 @@ func TestValidateOverlayResourcesForNodes(t *testing.T) {
 	}
 }
 
-func TestHasSubnetOverlap(t *testing.T) {
+func TestVRFSubnetsClaim(t *testing.T) {
 	tests := []struct {
 		name            string
 		ipNets          []string
+		wantRejected    []int
 		wantErrContains string
 	}{
 		{
@@ -1575,39 +1577,60 @@ func TestHasSubnetOverlap(t *testing.T) {
 			ipNets: []string{"2001:db8::/64", "2001:db9::/64"},
 		},
 		{
+			name:   "no overlap - IPv4 and IPv6 are separate",
+			ipNets: []string{"0.0.0.0/0", "::/0"},
+		},
+		{
 			name:            "overlap - one subnet contains another",
 			ipNets:          []string{"192.168.0.0/16", "192.168.1.0/24"},
+			wantRejected:    []int{1},
 			wantErrContains: "IPNet 192.168.1.0/24 (element 1) overlaps with IPNet 192.168.0.0/16 (element 0)",
 		},
 		{
 			name:            "overlap - one subnet contains another - ordered the other way",
 			ipNets:          []string{"192.168.1.0/24", "192.168.0.0/16"},
-			wantErrContains: "IPNet 192.168.1.0/24 (element 0) overlaps with IPNet 192.168.0.0/16 (element 1)",
+			wantRejected:    []int{1},
+			wantErrContains: "IPNet 192.168.0.0/16 (element 1) overlaps with IPNet 192.168.1.0/24 (element 0)",
 		},
 		{
 			name:            "overlap - larger subnet contains smaller",
 			ipNets:          []string{"192.168.0.0/24", "192.168.2.0/16"},
+			wantRejected:    []int{1},
 			wantErrContains: "IPNet 192.168.0.0/16 (element 1) overlaps with IPNet 192.168.0.0/24 (element 0)",
 		},
 		{
 			name:            "overlap - IPv6 one subnet contains another",
 			ipNets:          []string{"2001:db8::/32", "2001:db8:1::/64"},
+			wantRejected:    []int{1},
 			wantErrContains: "IPNet 2001:db8:1::/64 (element 1) overlaps with IPNet 2001:db8::/32 (element 0)",
 		},
 		{
 			name:            "overlap - identical subnets",
 			ipNets:          []string{"192.168.1.0/24", "192.168.1.0/24"},
+			wantRejected:    []int{1},
 			wantErrContains: "IPNet 192.168.1.0/24 (element 1) overlaps with IPNet 192.168.1.0/24 (element 0)",
 		},
 		{
-			name:            "overlap - multiple subnets with both overlapping",
+			name:            "overlap - a later subnet contains two accepted ones",
 			ipNets:          []string{"192.168.1.0/24", "192.168.2.0/24", "192.168.0.0/16"},
-			wantErrContains: "IPNet 192.168.1.0/24 (element 0) overlaps with IPNet 192.168.0.0/16 (element 2)",
+			wantRejected:    []int{2},
+			wantErrContains: "IPNet 192.168.0.0/16 (element 2) overlaps with IPNet 192.168.1.0/24 (element 0)",
 		},
 		{
-			name:            "overlap - multiple subnets inside a larger subnet",
+			name:            "overlap - multiple subnets inside an accepted larger one",
 			ipNets:          []string{"192.168.0.0/16", "192.168.1.0/24", "192.168.2.0/24", "192.168.3.0/24"},
+			wantRejected:    []int{1, 2, 3},
 			wantErrContains: "IPNet 192.168.1.0/24 (element 1) overlaps with IPNet 192.168.0.0/16 (element 0)",
+		},
+		{
+			name:         "a rejected subnet blocks nothing after it",
+			ipNets:       []string{"10.0.0.0/24", "10.0.0.0/16", "10.0.1.0/24"},
+			wantRejected: []int{1},
+		},
+		{
+			name:         "a subnet between two accepted ones",
+			ipNets:       []string{"10.0.0.0/24", "10.0.2.0/24", "10.0.1.0/24", "10.0.1.128/25"},
+			wantRejected: []int{3},
 		},
 		{
 			name:   "single subnet - no overlap",
@@ -1621,31 +1644,26 @@ func TestHasSubnetOverlap(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			vniSubnets := make(subnets, len(tt.ipNets))
+			claimed := vrfSubnets{}
+			var rejected []int
+			var firstErr error
 			for i, cidr := range tt.ipNets {
 				_, ipnet, err := net.ParseCIDR(cidr)
 				if err != nil {
 					t.Fatalf("failed to parse CIDR %s: %v", cidr, err)
 				}
-				vniSubnets[i] = subnetWithSource{
-					source: fmt.Sprintf("element %d", i),
-					subnet: ipnet,
+				if err := claimed.claim("vrf", fmt.Sprintf("element %d", i), ipnet); err != nil {
+					rejected = append(rejected, i)
+					if firstErr == nil {
+						firstErr = err
+					}
 				}
 			}
-
-			vniSubnets.sort()
-			err := hasSubnetOverlap(vniSubnets)
-			if tt.wantErrContains != "" {
-				if err == nil {
-					t.Fatalf("hasIPOverlap() error = nil, want error containing %q", tt.wantErrContains)
-				}
-				if !strings.Contains(err.Error(), tt.wantErrContains) {
-					t.Errorf("hasIPOverlap() error = %v, want error containing %q", err, tt.wantErrContains)
-				}
-				return
+			if !slices.Equal(rejected, tt.wantRejected) {
+				t.Errorf("rejected = %v, want %v (first error %v)", rejected, tt.wantRejected, firstErr)
 			}
-			if err != nil {
-				t.Errorf("hasIPOverlap() error = %v, want nil", err)
+			if tt.wantErrContains != "" && (firstErr == nil || !strings.Contains(firstErr.Error(), tt.wantErrContains)) {
+				t.Errorf("first error = %v, want error containing %q", firstErr, tt.wantErrContains)
 			}
 		})
 	}

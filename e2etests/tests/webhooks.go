@@ -150,9 +150,9 @@ var _ = Describe("Webhooks", func() {
 			err = Updater.Update(config.Resources{
 				L3VNIs: []v1alpha1.L3VNI{l3vni1},
 			})
-			Expect(err).To(MatchError(ContainSubstring((`subnet overlap in VRF "test-vrf-1": IPNet 10.0.0.0/24 ` +
-				`(L3VNI openperouter-system/test-vni-1) overlaps with IPNet 10.0.0.0/25 ` +
-				`(L2VNI openperouter-system/test-l2vni-1)`))))
+			Expect(err).To(MatchError(ContainSubstring((`subnet overlap in VRF "test-vrf-1": IPNet 10.0.0.0/25 ` +
+				`(L2VNI openperouter-system/test-l2vni-1) overlaps with IPNet 10.0.0.0/24 ` +
+				`(L3VNI openperouter-system/test-vni-1)`))))
 		})
 	})
 
@@ -380,8 +380,8 @@ var _ = Describe("Webhooks", func() {
 						GatewayIPs:    []string{"10.0.0.1/24"},
 					},
 				},
-			}, `subnet overlap in VRF "test-vrf-1": IPNet 10.0.0.0/24 (L3VNI openperouter-system/test-vni-1) `+
-				`overlaps with IPNet 10.0.0.0/24 (L2VNI openperouter-system/first)`),
+			}, `subnet overlap in VRF "test-vrf-1": IPNet 10.0.0.0/24 (L2VNI openperouter-system/first) `+
+				`overlaps with IPNet 10.0.0.0/24 (L3VNI openperouter-system/test-vni-1)`),
 			Entry("when trying to create an L2VNI with IPv6 address that overlaps with L3VNI", []v1alpha1.L2VNI{
 				{
 					ObjectMeta: metav1.ObjectMeta{
@@ -395,8 +395,8 @@ var _ = Describe("Webhooks", func() {
 						GatewayIPs:    []string{"2000::2/64"},
 					},
 				},
-			}, `subnet overlap in VRF "test-vrf-1": IPNet 2000::/64 (L3VNI openperouter-system/test-vni-1) `+
-				`overlaps with IPNet 2000::/64 (L2VNI openperouter-system/first)`),
+			}, `subnet overlap in VRF "test-vrf-1": IPNet 2000::/64 (L2VNI openperouter-system/first) `+
+				`overlaps with IPNet 2000::/64 (L3VNI openperouter-system/test-vni-1)`),
 		)
 
 		It("should allow creating an L2VNI with valid IPv4 address", func() {
