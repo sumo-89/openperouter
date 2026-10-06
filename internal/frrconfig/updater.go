@@ -9,7 +9,55 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"sync"
 )
+
+// Updater skips the reload when the running FRR already has the rendered
+// configuration: frr-reload.py runs twice per reload even when nothing changed.
+// The running FRR is named by an identity the caller supplies (the router pod's
+// UID and the frr container's restart count); an empty identity never skips.
+// Skipping is safe because frr-reload.py runs `vtysh write` after each reload,
+// so a daemon restarted inside the container boots with the last applied
+// configuration. Drift in the running FRR is no longer corrected until the
+// configuration or the identity changes.
+type Updater struct {
+	configFile string
+	reload     func(context.Context, string) error
+
+	mu       sync.Mutex
+	applied  string
+	identity string
+}
+
+func NewUpdater(socketPath, configFile string) *Updater {
+	return &Updater{
+		configFile: configFile,
+		reload:     UpdaterForSocket(socketPath, configFile),
+	}
+}
+
+// For returns an update function for the router instance named by identity.
+func (u *Updater) For(identity string) func(context.Context, string) error {
+	return func(ctx context.Context, config string) error {
+		return u.Update(ctx, identity, config)
+	}
+}
+
+func (u *Updater) Update(ctx context.Context, identity, config string) error {
+	u.mu.Lock()
+	defer u.mu.Unlock()
+
+	if u.alreadyApplied(identity, config) {
+		slog.InfoContext(ctx, "frr configuration unchanged, reload skipped", "router", identity)
+		return nil
+	}
+	u.applied, u.identity = "", ""
+	if err := u.reload(ctx, config); err != nil {
+		return err
+	}
+	u.applied, u.identity = config, identity
+	return nil
+}
 
 func UpdaterForSocket(socketPath, configFile string) func(context.Context, string) error {
 	return func(ctx context.Context, config string) error {
@@ -47,4 +95,17 @@ func UpdaterForSocket(socketPath, configFile string) func(context.Context, strin
 		}
 		return updaterClient(ctx)
 	}
+}
+
+// alreadyApplied tells whether the same router instance accepted exactly this
+// configuration, and the file still holds it.
+func (u *Updater) alreadyApplied(identity, config string) bool {
+	if identity == "" {
+		return false
+	}
+	if identity != u.identity || config != u.applied {
+		return false
+	}
+	onDisk, err := os.ReadFile(u.configFile)
+	return err == nil && string(onDisk) == config
 }

@@ -65,6 +65,9 @@ type PERouterReconciler struct {
 	// notStaticConfigsListOpts filters out mirrored resources (source=static) when listing CRDs.
 	// Built once in SetupWithManager since the label is const.
 	notStaticConfigsListOpts *client.ListOptions
+
+	// frrUpdater remembers what the running FRR has, across reconciles.
+	frrUpdater *frrconfig.Updater
 }
 
 type requestKey string
@@ -152,6 +155,9 @@ func (r *PERouterReconciler) reconcile(ctx context.Context, logger *slog.Logger)
 	}
 
 	updater := frrconfig.UpdaterForSocket(r.FRRReloadSocket, r.FRRConfigPath)
+	if r.frrUpdater != nil {
+		updater = r.frrUpdater.For(r.routerIdentity(ctx, logger))
+	}
 
 	nodeIndex, err := r.RouterProvider.NodeIndex(ctx)
 	if err != nil {
@@ -414,6 +420,7 @@ func (r *PERouterReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		return fmt.Errorf("failed to build label requirement: %w", err)
 	}
 	r.notStaticConfigsListOpts = &client.ListOptions{LabelSelector: labels.NewSelector().Add(*notMirrored)}
+	r.frrUpdater = frrconfig.NewUpdater(r.FRRReloadSocket, r.FRRConfigPath)
 
 	filterNonRouterPods := predicate.NewPredicateFuncs(func(object client.Object) bool {
 		switch o := object.(type) {
@@ -482,6 +489,32 @@ func (r *PERouterReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	}
 
 	return builder.Complete(r)
+}
+
+// routerIdentity names the FRR instance the reconcile talks to: the router pod
+// on this node and its frr container's restart count. It is empty when the pod
+// cannot be told apart (host mode, no pod yet, more than one during a rollout),
+// and an empty identity makes every reload go through.
+func (r *PERouterReconciler) routerIdentity(ctx context.Context, logger *slog.Logger) string {
+	var pods v1.PodList
+	if err := r.List(ctx, &pods, client.InNamespace(r.MyNamespace),
+		client.MatchingLabels{"app": "router"}, client.MatchingFields{nodeNameIndex: r.MyNode}); err != nil {
+		logger.Warn("could not list the router pod, the FRR reload is not skipped", "error", err)
+		return ""
+	}
+	if len(pods.Items) != 1 {
+		return ""
+	}
+	return podRouterIdentity(&pods.Items[0])
+}
+
+func podRouterIdentity(pod *v1.Pod) string {
+	for _, status := range pod.Status.ContainerStatuses {
+		if status.Name == "frr" {
+			return fmt.Sprintf("%s/%d", pod.UID, status.RestartCount)
+		}
+	}
+	return ""
 }
 
 func setPodNodeNameIndex(mgr ctrl.Manager) error {
