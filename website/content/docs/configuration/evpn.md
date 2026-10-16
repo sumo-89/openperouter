@@ -163,6 +163,7 @@ L2VNIs provide Layer 2 connectivity across nodes using EVPN tunnels. Unlike L3VN
 | `routingDomain.l3vni.name` | string | metadata.name of the L3VNI that provides the routing domain | Yes (when type is `L3VNI`) |
 | `routingDomain.l3vpn.name` | string | metadata.name of the L3VPN that provides the routing domain | Yes (when type is `L3VPN`) |
 | `gatewayIPs` | string array | IP addresses in CIDR notation for the distributed anycast gateway. Cannot be set without routingDomain. Max 2 (one IPv4, one IPv6). | No |
+| `gatewayMAC` | string | MAC address of the distributed anycast gateway, in colon form (`aa:bb:cc:dd:ee:ff`): unicast and not all zeros. Cannot be set without gatewayIPs, and cannot be added, changed or removed after creation. Defaults to a MAC derived from the VNI. See [Sharing the gateway with the fabric](#sharing-the-gateway-with-the-fabric). | No |
 | `exportRTs` | string array | Route targets attached to Type-2 EVPN routes advertised by this L2VNI. Maximum 100 entries. | No |
 | `importRTs` | string array | Route targets accepted when importing Type-2 EVPN routes for this L2VNI. Maximum 100 entries. | No |
 | `underlayAddressFamily` | string | VTEP address family for this VNI (`IPv4` or `IPv6`). Defaults to available family (IPv4 preferred in dual-stack). | No |
@@ -200,6 +201,43 @@ spec:
 Route targets use the same `ASN:member` or `IPv4-address:member` formats as
 L3VNIs and L3VPNs. Both lists are optional. When they are omitted, the L2VNI
 retains the default route-target behavior.
+
+### Sharing the gateway with the fabric
+
+With `gatewayIPs`, every node the L2VNI selects is a gateway for the segment,
+with the same addresses on its bridge and, by default, the same MAC: `00:f3`
+followed by VNI+1 as a 32-bit big-endian number. When the fabric's switches
+are also gateways for the segment (an anycast gateway on the leafs' IRB
+interfaces, for example, with hosts behind the leafs and workloads behind the
+nodes on one L2 segment), the nodes and the switches must answer for the
+gateway with the same MAC, or a host learns one MAC for the gateway address
+and a workload another. Set `gatewayMAC` to the MAC the fabric uses. An anycast
+gateway with virtual router ID N typically uses `00:00:5e:00:01:N`:
+
+```yaml
+apiVersion: network.openperouter.io/v1alpha1
+kind: L2VNI
+metadata:
+  name: l2mixed
+  namespace: openperouter-system
+spec:
+  vni: 230
+  routingDomain:
+    type: L3VNI
+    l3vni:
+      name: red
+  gatewayIPs:
+  - 192.168.30.1/24
+  gatewayMAC: "00:00:5e:00:01:01"
+```
+
+Many L2VNIs can use the same `gatewayMAC`; each has its own bridge. The bridge
+gets the MAC before the VXLAN interface or the veth is attached to
+it, and the MAC is never changed afterwards. That is why the field cannot be
+added, changed or removed on an existing L2VNI: changing the MAC of a bridge
+that already has ports lets an FDB entry learned from the fabric for the same
+MAC take the place of the bridge's own. To change it, delete and re-create the
+L2VNI.
 
 ## What Happens During Reconciliation
 

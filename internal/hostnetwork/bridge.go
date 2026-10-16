@@ -7,6 +7,7 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
+	"net"
 	"strconv"
 	"strings"
 
@@ -109,21 +110,26 @@ func BridgeFixedMAC(vni int32) ([]byte, error) {
 	return macAddress, nil
 }
 
-// ensureBridgeFixedMacAddress sets a deterministic MAC address on the bridge based on the VNI.
+// GatewayMAC returns the MAC of the distributed gateway on an L2VNI bridge:
+// the L2VNI's gatewayMAC when set, else the one derived from the VNI.
+func GatewayMAC(params L2VNIParams) (net.HardwareAddr, error) {
+	if params.GatewayMAC != nil {
+		return params.GatewayMAC, nil
+	}
+	mac, err := BridgeFixedMAC(params.VNI)
+	return net.HardwareAddr(mac), err
+}
+
+// ensureBridgeFixedMacAddress sets the given MAC on the bridge.
 // It is idempotent: if the MAC is already correct, it skips the update to avoid
 // unnecessary RTM_NEWLINK events that can cause FRR to flush neighbor entries.
-func ensureBridgeFixedMacAddress(bridge netlink.Link, vni int32) error {
-	macAddress, err := BridgeFixedMAC(vni)
-	if err != nil {
-		return err
-	}
-
-	if bytes.Equal(bridge.Attrs().HardwareAddr, macAddress) {
+func ensureBridgeFixedMacAddress(bridge netlink.Link, mac net.HardwareAddr) error {
+	if bytes.Equal(bridge.Attrs().HardwareAddr, mac) {
 		return nil
 	}
 
-	if err := netlink.LinkSetHardwareAddr(bridge, macAddress); err != nil {
-		return fmt.Errorf("failed to set mac address to bridge %s %x: %w", bridge.Attrs().Name, macAddress, err)
+	if err := netlink.LinkSetHardwareAddr(bridge, mac); err != nil {
+		return fmt.Errorf("failed to set mac address to bridge %s %s: %w", bridge.Attrs().Name, mac, err)
 	}
 	return nil
 }

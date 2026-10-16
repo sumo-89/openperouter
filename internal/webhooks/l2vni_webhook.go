@@ -13,6 +13,7 @@ import (
 	"github.com/openperouter/openperouter/internal/conversion"
 	v1 "k8s.io/api/admission/v1"
 	corev1 "k8s.io/api/core/v1"
+	"k8s.io/utils/ptr"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/webhook"
@@ -99,6 +100,13 @@ func validateL2VNIUpdate(oldL2VNI, l2vni *v1alpha1.L2VNI) error {
 
 	if !slices.Equal(oldL2VNI.Spec.GatewayIPs, l2vni.Spec.GatewayIPs) {
 		return errors.New("GatewayIPs cannot be changed")
+	}
+	// The bridge's MAC must not change while it has ports, so adding and
+	// removing the field are refused too. Repeated here so that it also holds
+	// with an older CRD.
+	if !ptr.Equal(oldL2VNI.Spec.GatewayMAC, l2vni.Spec.GatewayMAC) {
+		return fmt.Errorf("gatewayMAC cannot be changed (from %q to %q)",
+			ptr.Deref(oldL2VNI.Spec.GatewayMAC, ""), ptr.Deref(l2vni.Spec.GatewayMAC, ""))
 	}
 
 	return validateL2VNI(l2vni)

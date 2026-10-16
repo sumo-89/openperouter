@@ -379,6 +379,11 @@ func (in *L2VNISpec) DeepCopyInto(out *L2VNISpec) {
 		*out = make([]string, len(*in))
 		copy(*out, *in)
 	}
+	if in.GatewayMAC != nil {
+		in, out := &in.GatewayMAC, &out.GatewayMAC
+		*out = new(string)
+		**out = **in
+	}
 	if in.ExportRTs != nil {
 		in, out := &in.ExportRTs, &out.ExportRTs
 		*out = make([]RouteTarget, len(*in))

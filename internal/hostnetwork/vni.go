@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net"
 	"strings"
 
 	"github.com/openperouter/openperouter/internal/netnamespace"
@@ -57,7 +58,10 @@ type L2VNIParams struct {
 	VNIParams
 	Name         string
 	L2GatewayIPs []string
-	HostMaster   *HostMaster
+	// GatewayMAC is the MAC of the distributed gateway, used only with
+	// L2GatewayIPs; nil means the MAC derived from the VNI.
+	GatewayMAC net.HardwareAddr
+	HostMaster *HostMaster
 }
 
 type HostMaster struct {
@@ -137,11 +141,15 @@ func SetupL3VNI(ctx context.Context, params L3VNIParams) error {
 func SetupL2VNI(ctx context.Context, params L2VNIParams) error {
 	var bridgeOptions []NetlinkOption
 	if len(params.L2GatewayIPs) > 0 {
+		mac, err := GatewayMAC(params)
+		if err != nil {
+			return fmt.Errorf("SetupL2VNI: failed to compute the gateway MAC: %w", err)
+		}
 		// Set before any port is enslaved: changing the MAC of a bridge whose
 		// VXLAN port has a remote FDB entry for that MAC replaces the entry with
 		// a local one behind zebra's back.
 		bridgeOptions = append(bridgeOptions, func(bridge netlink.Link) error {
-			return ensureBridgeFixedMacAddress(bridge, params.VNI)
+			return ensureBridgeFixedMacAddress(bridge, mac)
 		})
 	}
 	if err := setupVNI(ctx, params.VNIParams, bridgeOptions...); err != nil {

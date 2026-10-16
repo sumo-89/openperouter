@@ -49,7 +49,7 @@ var _ = Describe("ensureBridgeFixedMacAddress", func() {
 		bridge, err := netlink.LinkByName(bridgeName)
 		Expect(err).NotTo(HaveOccurred())
 
-		Expect(ensureBridgeFixedMacAddress(bridge, vni)).To(Succeed())
+		Expect(ensureBridgeFixedMacAddress(bridge, expectedMAC(vni))).To(Succeed())
 
 		bridge, err = netlink.LinkByName(bridgeName)
 		Expect(err).NotTo(HaveOccurred())
@@ -61,7 +61,7 @@ var _ = Describe("ensureBridgeFixedMacAddress", func() {
 		Expect(err).NotTo(HaveOccurred())
 
 		By("setting the MAC for the first time")
-		Expect(ensureBridgeFixedMacAddress(bridge, vni)).To(Succeed())
+		Expect(ensureBridgeFixedMacAddress(bridge, expectedMAC(vni))).To(Succeed())
 
 		By("re-fetching the bridge to pick up the updated MAC")
 		bridge, err = netlink.LinkByName(bridgeName)
@@ -75,7 +75,7 @@ var _ = Describe("ensureBridgeFixedMacAddress", func() {
 		Expect(netlink.LinkSubscribe(updates, done)).To(Succeed())
 
 		By("calling ensureBridgeFixedMacAddress again with the same VNI")
-		Expect(ensureBridgeFixedMacAddress(bridge, vni)).To(Succeed())
+		Expect(ensureBridgeFixedMacAddress(bridge, expectedMAC(vni))).To(Succeed())
 
 		By("verifying no netlink link update was emitted for the bridge")
 		Consistently(func() bool {

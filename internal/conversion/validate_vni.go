@@ -26,11 +26,13 @@ import (
 var (
 	interfaceNameRegexp *regexp.Regexp
 	ipv4LikeRegexp      *regexp.Regexp
+	colonMACRegexp      *regexp.Regexp
 )
 
 func init() {
 	interfaceNameRegexp = regexp.MustCompile(`^[a-zA-Z][a-zA-Z0-9._-]*$`)
 	ipv4LikeRegexp = regexp.MustCompile(`^\d+\.\d+\.\d+\.\d+$`)
+	colonMACRegexp = regexp.MustCompile(`^([0-9a-fA-F]{2}:){5}[0-9a-fA-F]{2}$`)
 }
 
 // FilterValidL3VNIs validates L3VNIs per-field and returns the valid resources
@@ -142,7 +144,7 @@ func FilterUniqueL2VNIs(
 	return validL2, errors.Join(allErrors...)
 }
 
-// validateL2VNI validates a single L2VNI's fields (HostMaster, GatewayIPs, route targets).
+// validateL2VNI validates a single L2VNI's fields (HostMaster, GatewayIPs, GatewayMAC, route targets).
 func validateL2VNI(l2Vni v1alpha1.L2VNI) error {
 	if l2Vni.Spec.HostMaster != nil {
 		if err := validateHostMaster(l2Vni.Name, l2Vni.Spec.HostMaster); err != nil {
@@ -152,6 +154,14 @@ func validateL2VNI(l2Vni v1alpha1.L2VNI) error {
 	if len(l2Vni.Spec.GatewayIPs) > 0 {
 		if _, err := ipfamily.ForCIDRStrings(l2Vni.Spec.GatewayIPs...); err != nil {
 			return fmt.Errorf("invalid gatewayIPs for vni %q = %v: %w", l2Vni.Name, l2Vni.Spec.GatewayIPs, err)
+		}
+	}
+	if l2Vni.Spec.GatewayMAC != nil {
+		if len(l2Vni.Spec.GatewayIPs) == 0 {
+			return fmt.Errorf("invalid gatewayMAC for vni %q: gatewayMAC requires gatewayIPs", l2Vni.Name)
+		}
+		if _, err := ParseGatewayMAC(*l2Vni.Spec.GatewayMAC); err != nil {
+			return fmt.Errorf("invalid gatewayMAC for vni %q: %w", l2Vni.Name, err)
 		}
 	}
 	if err := ValidateRouteTargets(
@@ -442,6 +452,30 @@ func isValidInterfaceName(name string) error {
 	}
 	return nil
 }
+
+// ParseGatewayMAC parses the gatewayMAC of an L2VNI: a unicast, non-zero
+// 48-bit MAC in colon form. Locally administered addresses are allowed.
+func ParseGatewayMAC(mac string) (net.HardwareAddr, error) {
+	// net.ParseMAC also accepts other notations and lengths than the CRD's.
+	if !colonMACRegexp.MatchString(mac) {
+		return nil, fmt.Errorf("%q is not a 48-bit MAC in colon form (aa:bb:cc:dd:ee:ff)", mac)
+	}
+	hw, err := net.ParseMAC(mac)
+	if err != nil {
+		return nil, fmt.Errorf("%q is not a MAC: %w", mac, err)
+	}
+	switch {
+	case bytes.Equal(hw, broadcastMAC):
+		return nil, fmt.Errorf("%q must not be the broadcast address", mac)
+	case hw[0]&0x01 != 0:
+		return nil, fmt.Errorf("%q must be unicast: the least significant bit of the first octet is set", mac)
+	case bytes.Equal(hw, make(net.HardwareAddr, len(hw))):
+		return nil, fmt.Errorf("%q must not be all zeros", mac)
+	}
+	return hw, nil
+}
+
+var broadcastMAC = net.HardwareAddr{0xff, 0xff, 0xff, 0xff, 0xff, 0xff}
 
 func isValidCIDR(cidr string) error {
 	if cidr == "" {

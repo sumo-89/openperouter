@@ -88,11 +88,11 @@ func SetupL2VNI(ctx context.Context, client *Client, params hostnetwork.L2VNIPar
 }
 
 func setupL2Gateway(ctx context.Context, client *Client, bridgeName string, params hostnetwork.L2VNIParams) error {
-	mac, err := hostnetwork.BridgeFixedMAC(params.VNI)
+	mac, err := hostnetwork.GatewayMAC(params)
 	if err != nil {
-		return fmt.Errorf("failed to compute fixed MAC for VNI %d: %w", params.VNI, err)
+		return fmt.Errorf("failed to compute gateway MAC for VNI %d: %w", params.VNI, err)
 	}
-	if err := client.setBridgeMAC(ctx, bridgeName, net.HardwareAddr(mac).String()); err != nil {
+	if err := client.setBridgeMAC(ctx, bridgeName, mac.String()); err != nil {
 		return fmt.Errorf("failed to set fixed MAC on bridge %s: %w", bridgeName, err)
 	}
 

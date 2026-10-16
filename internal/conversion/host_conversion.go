@@ -361,6 +361,13 @@ func l2vniToHost(
 		hostL2VNI.L2GatewayIPs = make([]string, len(l2vni.Spec.GatewayIPs))
 		copy(hostL2VNI.L2GatewayIPs, l2vni.Spec.GatewayIPs)
 	}
+	if l2vni.Spec.GatewayMAC != nil {
+		mac, err := ParseGatewayMAC(*l2vni.Spec.GatewayMAC)
+		if err != nil {
+			return hostnetwork.L2VNIParams{}, fmt.Errorf("L2VNI %s: invalid gatewayMAC: %w", l2vni.Name, err)
+		}
+		hostL2VNI.GatewayMAC = mac
+	}
 	if l2vni.Spec.HostMaster != nil {
 		hm, err := convertHostMaster(&l2vni)
 		if err != nil {

@@ -33,6 +33,8 @@ const (
 
 // L2VNISpec defines the desired state of VNI.
 // +kubebuilder:validation:XValidation:rule="!has(self.gatewayIPs) || size(self.gatewayIPs) == 0 || has(self.routingDomain)",message="gatewayIPs cannot be set without routingDomain"
+// +kubebuilder:validation:XValidation:rule="!has(self.gatewayMAC) || (has(self.gatewayIPs) && size(self.gatewayIPs) > 0)",message="gatewayMAC cannot be set without gatewayIPs"
+// +kubebuilder:validation:XValidation:rule="has(self.gatewayMAC) == has(oldSelf.gatewayMAC) && (!has(self.gatewayMAC) || self.gatewayMAC == oldSelf.gatewayMAC)",message="gatewayMAC cannot be changed"
 type L2VNISpec struct {
 	// nodeSelector specifies which nodes this L2VNI applies to.
 	// If empty or not specified, applies to all nodes.
@@ -85,6 +87,23 @@ type L2VNISpec struct {
 	// +kubebuilder:validation:XValidation:rule="self == oldSelf",message="GatewayIPs cannot be changed"
 	// +listType=atomic
 	GatewayIPs []string `json:"gatewayIPs,omitempty"`
+
+	// gatewayMAC is the MAC address of the distributed gateway on this L2
+	// segment's bridge. Set it to the MAC the fabric's distributed gateway
+	// uses for the segment, so that the gateway has the same IP and the same
+	// MAC on this node as on the fabric's switches. An anycast gateway with
+	// virtual router ID N typically uses 00:00:5e:00:01:N (N in hex).
+	// It must be a unicast, non-zero 48-bit MAC in colon form
+	// (aa:bb:cc:dd:ee:ff); locally administered addresses are allowed. It
+	// can be set only together with gatewayIPs, and it cannot be added,
+	// changed or removed once the L2VNI exists.
+	// When unset, the bridge gets a MAC derived from the VNI.
+	// +optional
+	// +kubebuilder:validation:MaxLength=17
+	// +kubebuilder:validation:Pattern=`^([0-9a-fA-F]{2}:){5}[0-9a-fA-F]{2}$`
+	// +kubebuilder:validation:XValidation:rule="self.matches('^.[02468aAcCeE]')",message="gatewayMAC must be a unicast MAC: the least significant bit of the first octet must be 0"
+	// +kubebuilder:validation:XValidation:rule="self != '00:00:00:00:00:00'",message="gatewayMAC must not be all zeros"
+	GatewayMAC *string `json:"gatewayMAC,omitempty"`
 
 	// exportRTs are the Route Targets to be used for exporting L2 EVPN routes.
 	// +kubebuilder:validation:MaxItems:=100
