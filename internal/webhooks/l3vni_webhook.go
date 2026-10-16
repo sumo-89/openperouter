@@ -65,14 +65,14 @@ func (v *L3VNIValidator) Handle(ctx context.Context, req admission.Request) (res
 
 	switch req.Operation {
 	case v1.Create:
-		if err := validateL3VNICreate(&l3vni); err != nil {
+		if err := validateL3VNICreate(ctx, &l3vni); err != nil {
 			return admission.Denied(err.Error())
 		}
 		if err := DatapathConfigValidator.Validate(conversion.APIConfigData{L3VNIs: []v1alpha1.L3VNI{l3vni}}); err != nil {
 			return admission.Denied(err.Error())
 		}
 	case v1.Update:
-		if err := validateL3VNIUpdate(&l3vni, &oldL3VNI); err != nil {
+		if err := validateL3VNIUpdate(ctx, &l3vni, &oldL3VNI); err != nil {
 			return admission.Denied(err.Error())
 		}
 		if err := DatapathConfigValidator.Validate(conversion.APIConfigData{L3VNIs: []v1alpha1.L3VNI{l3vni}}); err != nil {
@@ -86,14 +86,14 @@ func (v *L3VNIValidator) Handle(ctx context.Context, req admission.Request) (res
 	return admission.Allowed("")
 }
 
-func validateL3VNICreate(l3vni *v1alpha1.L3VNI) error {
+func validateL3VNICreate(ctx context.Context, l3vni *v1alpha1.L3VNI) error {
 	Logger.Debug("webhook l3vni", "action", "create", "name", l3vni.Name, "namespace", l3vni.Namespace)
 	defer Logger.Debug("webhook l3vni", "action", "end create", "name", l3vni.Name, "namespace", l3vni.Namespace)
 
-	return validateL3VNI(l3vni)
+	return validateL3VNI(ctx, l3vni)
 }
 
-func validateL3VNIUpdate(l3vni *v1alpha1.L3VNI, oldL3VNI *v1alpha1.L3VNI) error {
+func validateL3VNIUpdate(ctx context.Context, l3vni *v1alpha1.L3VNI, oldL3VNI *v1alpha1.L3VNI) error {
 	Logger.Debug("webhook l3vni", "action", "update", "name", l3vni.Name, "namespace", l3vni.Namespace)
 	defer Logger.Debug("webhook l3vni", "action", "end update", "name", l3vni.Name, "namespace", l3vni.Namespace)
 
@@ -101,7 +101,7 @@ func validateL3VNIUpdate(l3vni *v1alpha1.L3VNI, oldL3VNI *v1alpha1.L3VNI) error 
 		return errors.New("localCIDRs cannot be changed")
 	}
 
-	return validateL3VNI(l3vni)
+	return validateL3VNI(ctx, l3vni)
 }
 
 func localCIDR(hostSession *v1alpha1.HostSession) []string {
@@ -115,8 +115,8 @@ func validateL3VNIDelete(_ *v1alpha1.L3VNI) error {
 	return nil
 }
 
-func validateL3VNI(l3vni *v1alpha1.L3VNI) error {
-	existingL3VNIs, err := getL3VNIs()
+func validateL3VNI(ctx context.Context, l3vni *v1alpha1.L3VNI) error {
+	existingL3VNIs, err := getL3VNIs(ctx)
 	if err != nil {
 		return err
 	}
@@ -136,21 +136,22 @@ func validateL3VNI(l3vni *v1alpha1.L3VNI) error {
 	}
 
 	nodeList := &corev1.NodeList{}
-	if err := WebhookClient.List(context.Background(), nodeList, &client.ListOptions{}); err != nil {
+	if err := WebhookClient.List(ctx, nodeList, &client.ListOptions{}); err != nil {
 		return fmt.Errorf("failed to get existing Node objects when validating L3VNI: %w", err)
 	}
 
-	toValidateL2, err := getL2VNIs()
+	toValidateL2, err := getL2VNIs(ctx)
 	if err != nil {
 		return err
 	}
 
-	l3vpnList, err := getL3VPNs()
+	l3vpnList, err := getL3VPNs(ctx)
 	if err != nil {
 		return err
 	}
 
 	if err := conversion.ValidateOverlayResourcesForNodes(
+		ctx,
 		nodeList.Items,
 		toValidateL2.Items,
 		toValidate,
@@ -159,7 +160,7 @@ func validateL3VNI(l3vni *v1alpha1.L3VNI) error {
 		return fmt.Errorf("validation failed: %w", err)
 	}
 
-	l3passthroughs, err := getL3Passthroughs()
+	l3passthroughs, err := getL3Passthroughs(ctx)
 	if err != nil {
 		return err
 	}
@@ -171,9 +172,9 @@ func validateL3VNI(l3vni *v1alpha1.L3VNI) error {
 	return nil
 }
 
-var getL3VNIs = func() (*v1alpha1.L3VNIList, error) {
+var getL3VNIs = func(ctx context.Context) (*v1alpha1.L3VNIList, error) {
 	l3vniList := &v1alpha1.L3VNIList{}
-	err := WebhookClient.List(context.Background(), l3vniList, &client.ListOptions{})
+	err := WebhookClient.List(ctx, l3vniList, &client.ListOptions{})
 	if err != nil {
 		return nil, errors.Join(err, errors.New("failed to get existing L3VNI objects"))
 	}

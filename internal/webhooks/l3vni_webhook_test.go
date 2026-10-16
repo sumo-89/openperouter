@@ -274,7 +274,7 @@ func TestValidateL3VNICreate(t *testing.T) {
 			WebhookClient = client
 			Logger, _ = logging.New("debug")
 
-			err = validateL3VNICreate(tc.newL3VNI)
+			err = validateL3VNICreate(t.Context(), tc.newL3VNI)
 			if tc.errorString == "" {
 				if err != nil {
 					t.Fatalf("expected no error, but got %q", err)
@@ -422,7 +422,7 @@ func TestValidateL3VNIUpdate(t *testing.T) {
 			WebhookClient = client
 			Logger, _ = logging.New("debug")
 
-			err = validateL3VNIUpdate(tc.newL3VNI, tc.oldL3VNI)
+			err = validateL3VNIUpdate(t.Context(), tc.newL3VNI, tc.oldL3VNI)
 			if tc.errorString == "" {
 				if err != nil {
 					t.Fatalf("expected no error, but got %q", err)

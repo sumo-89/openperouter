@@ -65,11 +65,11 @@ func (v *L3VPNValidator) Handle(ctx context.Context, req admission.Request) (res
 
 	switch req.Operation {
 	case v1.Create:
-		if err := validateL3VPNCreate(&l3vpn); err != nil {
+		if err := validateL3VPNCreate(ctx, &l3vpn); err != nil {
 			return admission.Denied(err.Error())
 		}
 	case v1.Update:
-		if err := validateL3VPNUpdate(&l3vpn, &oldL3VPN); err != nil {
+		if err := validateL3VPNUpdate(ctx, &l3vpn, &oldL3VPN); err != nil {
 			return admission.Denied(err.Error())
 		}
 	case v1.Delete:
@@ -80,14 +80,14 @@ func (v *L3VPNValidator) Handle(ctx context.Context, req admission.Request) (res
 	return admission.Allowed("")
 }
 
-func validateL3VPNCreate(l3vpn *v1alpha1.L3VPN) error {
+func validateL3VPNCreate(ctx context.Context, l3vpn *v1alpha1.L3VPN) error {
 	Logger.Debug("webhook l3vpn", "action", "create", "name", l3vpn.Name, "namespace", l3vpn.Namespace)
 	defer Logger.Debug("webhook l3vpn", "action", "end create", "name", l3vpn.Name, "namespace", l3vpn.Namespace)
 
-	return validateL3VPN(l3vpn)
+	return validateL3VPN(ctx, l3vpn)
 }
 
-func validateL3VPNUpdate(l3vpn *v1alpha1.L3VPN, oldL3VPN *v1alpha1.L3VPN) error {
+func validateL3VPNUpdate(ctx context.Context, l3vpn *v1alpha1.L3VPN, oldL3VPN *v1alpha1.L3VPN) error {
 	Logger.Debug("webhook l3vpn", "action", "update", "name", l3vpn.Name, "namespace", l3vpn.Namespace)
 	defer Logger.Debug("webhook l3vpn", "action", "end update", "name", l3vpn.Name, "namespace", l3vpn.Namespace)
 
@@ -95,7 +95,7 @@ func validateL3VPNUpdate(l3vpn *v1alpha1.L3VPN, oldL3VPN *v1alpha1.L3VPN) error 
 		return errors.New("localCIDRs cannot be changed")
 	}
 
-	return validateL3VPN(l3vpn)
+	return validateL3VPN(ctx, l3vpn)
 }
 
 func validateL3VPNDelete(_ *v1alpha1.L3VPN) error {
@@ -103,8 +103,8 @@ func validateL3VPNDelete(_ *v1alpha1.L3VPN) error {
 }
 
 // validateL3VPN contains validation logic that is common to the Create and Update operations.
-func validateL3VPN(l3vpn *v1alpha1.L3VPN) error {
-	existingL3VPNs, err := getL3VPNs()
+func validateL3VPN(ctx context.Context, l3vpn *v1alpha1.L3VPN) error {
+	existingL3VPNs, err := getL3VPNs(ctx)
 	if err != nil {
 		return err
 	}
@@ -123,18 +123,18 @@ func validateL3VPN(l3vpn *v1alpha1.L3VPN) error {
 		toValidate = append(toValidate, *l3vpn.DeepCopy())
 	}
 
-	l2vniList, err := getL2VNIs()
+	l2vniList, err := getL2VNIs(ctx)
 	if err != nil {
 		return err
 	}
 
-	underlayList, err := getUnderlays()
+	underlayList, err := getUnderlays(ctx)
 	if err != nil {
 		return err
 	}
 
 	nodeList := &corev1.NodeList{}
-	if err := WebhookClient.List(context.Background(), nodeList, &client.ListOptions{}); err != nil {
+	if err := WebhookClient.List(ctx, nodeList, &client.ListOptions{}); err != nil {
 		return fmt.Errorf("failed to get existing Node objects when validating Underlay: %w", err)
 	}
 
@@ -142,12 +142,13 @@ func validateL3VPN(l3vpn *v1alpha1.L3VPN) error {
 		return fmt.Errorf("validation failed: %w", err)
 	}
 
-	l3vniList, err := getL3VNIs()
+	l3vniList, err := getL3VNIs(ctx)
 	if err != nil {
 		return err
 	}
 
 	if err := conversion.ValidateOverlayResourcesForNodes(
+		ctx,
 		nodeList.Items,
 		l2vniList.Items,
 		l3vniList.Items,
@@ -159,9 +160,9 @@ func validateL3VPN(l3vpn *v1alpha1.L3VPN) error {
 	return nil
 }
 
-func getL3VPNs() (*v1alpha1.L3VPNList, error) {
+func getL3VPNs(ctx context.Context) (*v1alpha1.L3VPNList, error) {
 	l3vpnList := &v1alpha1.L3VPNList{}
-	err := WebhookClient.List(context.Background(), l3vpnList, &client.ListOptions{})
+	err := WebhookClient.List(ctx, l3vpnList, &client.ListOptions{})
 	if err != nil {
 		return nil, errors.Join(err, errors.New("failed to get existing L3VPN objects"))
 	}

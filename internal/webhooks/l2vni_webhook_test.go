@@ -3,6 +3,8 @@
 package webhooks
 
 import (
+	"context"
+	"errors"
 	"strings"
 	"testing"
 
@@ -345,7 +347,7 @@ func TestValidateL2VNICreate(t *testing.T) {
 			WebhookClient = client
 			Logger, _ = logging.New("debug")
 
-			err = validateL2VNICreate(tc.newL2VNI)
+			err = validateL2VNICreate(t.Context(), tc.newL2VNI)
 			if tc.errorString == "" {
 				if err != nil {
 					t.Fatalf("expected no error, but got %q", err)
@@ -500,7 +502,7 @@ func TestValidateL2VNIUpdate(t *testing.T) {
 			WebhookClient = client
 			Logger, _ = logging.New("debug")
 
-			err = validateL2VNIUpdate(tc.oldL2VNI, tc.newL2VNI)
+			err = validateL2VNIUpdate(t.Context(), tc.oldL2VNI, tc.newL2VNI)
 			if tc.errorString == "" {
 				if err != nil {
 					t.Fatalf("expected no error, but got %q", err)
@@ -533,7 +535,7 @@ func TestValidateL2VNICreateRejectsInvalidRouteTarget(t *testing.T) {
 	WebhookClient = client
 	Logger, _ = logging.New("debug")
 
-	err = validateL2VNICreate(&v1alpha1.L2VNI{
+	err = validateL2VNICreate(t.Context(), &v1alpha1.L2VNI{
 		ObjectMeta: metav1.ObjectMeta{Name: "invalid-route-target", Namespace: "default"},
 		Spec: v1alpha1.L2VNISpec{
 			VNI:       100,
@@ -542,5 +544,32 @@ func TestValidateL2VNICreateRejectsInvalidRouteTarget(t *testing.T) {
 	})
 	if err == nil || !strings.Contains(err.Error(), `invalid route targets for vni "invalid-route-target"`) {
 		t.Fatalf("validateL2VNICreate() error = %v, want invalid route target error", err)
+	}
+}
+
+func TestValidateL2VNICreateStopsWhenTheContextIsDone(t *testing.T) {
+	node := &v1.Node{ObjectMeta: metav1.ObjectMeta{Name: "node1"}}
+	client, err := setupFakeWebhookClient(objectsFromResources([]*v1.Node{node}))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	originalWebhookClient := WebhookClient
+	originalLogger := Logger
+	defer func() {
+		WebhookClient = originalWebhookClient
+		Logger = originalLogger
+	}()
+	WebhookClient = client
+	Logger, _ = logging.New("debug")
+
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	err = validateL2VNICreate(ctx, &v1alpha1.L2VNI{
+		ObjectMeta: metav1.ObjectMeta{Name: "l2vni", Namespace: "default"},
+		Spec:       v1alpha1.L2VNISpec{VNI: 100},
+	})
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("validateL2VNICreate() error = %v, want context.Canceled", err)
 	}
 }

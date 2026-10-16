@@ -65,14 +65,14 @@ func (v *L2VNIValidator) Handle(ctx context.Context, req admission.Request) (res
 
 	switch req.Operation {
 	case v1.Create:
-		if err := validateL2VNICreate(&l2vni); err != nil {
+		if err := validateL2VNICreate(ctx, &l2vni); err != nil {
 			return admission.Denied(err.Error())
 		}
 		if err := DatapathConfigValidator.Validate(conversion.APIConfigData{L2VNIs: []v1alpha1.L2VNI{l2vni}}); err != nil {
 			return admission.Denied(err.Error())
 		}
 	case v1.Update:
-		if err := validateL2VNIUpdate(&oldL2VNI, &l2vni); err != nil {
+		if err := validateL2VNIUpdate(ctx, &oldL2VNI, &l2vni); err != nil {
 			return admission.Denied(err.Error())
 		}
 		if err := DatapathConfigValidator.Validate(conversion.APIConfigData{L2VNIs: []v1alpha1.L2VNI{l2vni}}); err != nil {
@@ -86,14 +86,14 @@ func (v *L2VNIValidator) Handle(ctx context.Context, req admission.Request) (res
 	return admission.Allowed("")
 }
 
-func validateL2VNICreate(l2vni *v1alpha1.L2VNI) error {
+func validateL2VNICreate(ctx context.Context, l2vni *v1alpha1.L2VNI) error {
 	Logger.Debug("webhook l2vni", "action", "create", "name", l2vni.Name, "namespace", l2vni.Namespace)
 	defer Logger.Debug("webhook l2vni", "action", "end create", "name", l2vni.Name, "namespace", l2vni.Namespace)
 
-	return validateL2VNI(l2vni)
+	return validateL2VNI(ctx, l2vni)
 }
 
-func validateL2VNIUpdate(oldL2VNI, l2vni *v1alpha1.L2VNI) error {
+func validateL2VNIUpdate(ctx context.Context, oldL2VNI, l2vni *v1alpha1.L2VNI) error {
 	Logger.Debug("webhook l2vni", "action", "update", "name", l2vni.Name, "namespace", l2vni.Namespace)
 	defer Logger.Debug("webhook l2vni", "action", "end update", "name", l2vni.Name, "namespace", l2vni.Namespace)
 
@@ -101,15 +101,15 @@ func validateL2VNIUpdate(oldL2VNI, l2vni *v1alpha1.L2VNI) error {
 		return errors.New("GatewayIPs cannot be changed")
 	}
 
-	return validateL2VNI(l2vni)
+	return validateL2VNI(ctx, l2vni)
 }
 
 func validateL2VNIDelete(_ *v1alpha1.L2VNI) error {
 	return nil
 }
 
-func validateL2VNI(l2vni *v1alpha1.L2VNI) error {
-	existingL2VNIs, err := getL2VNIs()
+func validateL2VNI(ctx context.Context, l2vni *v1alpha1.L2VNI) error {
+	existingL2VNIs, err := getL2VNIs(ctx)
 	if err != nil {
 		return err
 	}
@@ -129,21 +129,21 @@ func validateL2VNI(l2vni *v1alpha1.L2VNI) error {
 	}
 
 	nodeList := &corev1.NodeList{}
-	if err := WebhookClient.List(context.Background(), nodeList, &client.ListOptions{}); err != nil {
+	if err := WebhookClient.List(ctx, nodeList, &client.ListOptions{}); err != nil {
 		return fmt.Errorf("failed to get existing Node objects when validating L2VNI: %w", err)
 	}
 
-	toValidateL3, err := getL3VNIs()
+	toValidateL3, err := getL3VNIs(ctx)
 	if err != nil {
 		return err
 	}
 
-	l3vpnList, err := getL3VPNs()
+	l3vpnList, err := getL3VPNs(ctx)
 	if err != nil {
 		return err
 	}
 
-	if err := conversion.ValidateOverlayResourcesForNodes(nodeList.Items, toValidate,
+	if err := conversion.ValidateOverlayResourcesForNodes(ctx, nodeList.Items, toValidate,
 		toValidateL3.Items, l3vpnList.Items); err != nil {
 		return fmt.Errorf("validation failed: %w", err)
 	}
@@ -151,9 +151,9 @@ func validateL2VNI(l2vni *v1alpha1.L2VNI) error {
 	return nil
 }
 
-var getL2VNIs = func() (*v1alpha1.L2VNIList, error) {
+var getL2VNIs = func(ctx context.Context) (*v1alpha1.L2VNIList, error) {
 	l2vniList := &v1alpha1.L2VNIList{}
-	err := WebhookClient.List(context.Background(), l2vniList, &client.ListOptions{})
+	err := WebhookClient.List(ctx, l2vniList, &client.ListOptions{})
 	if err != nil {
 		return nil, errors.Join(err, errors.New("failed to get existing L2VNI objects"))
 	}

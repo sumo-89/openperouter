@@ -152,7 +152,7 @@ func TestValidateL3Passthrough(t *testing.T) {
 			WebhookClient = client
 			Logger, _ = logging.New("debug")
 
-			err = validateL3Passthrough(tc.newL3Passthrough)
+			err = validateL3Passthrough(t.Context(), tc.newL3Passthrough)
 			if tc.errorString == "" {
 				if err != nil {
 					t.Fatalf("expected no error, but got %q", err)

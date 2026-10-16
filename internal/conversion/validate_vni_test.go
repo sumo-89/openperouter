@@ -3,6 +3,8 @@
 package conversion
 
 import (
+	"context"
+	"errors"
 	"fmt"
 	"net"
 	"strings"
@@ -1543,7 +1545,7 @@ func TestValidateOverlayResourcesForNodes(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			err := ValidateOverlayResourcesForNodes(tt.nodes, tt.l2vnis, tt.l3vnis, tt.l3vpns)
+			err := ValidateOverlayResourcesForNodes(t.Context(), tt.nodes, tt.l2vnis, tt.l3vnis, tt.l3vpns)
 			if tt.wantErrStr != "" {
 				if err == nil {
 					t.Fatalf("expected error containing %q, got nil", tt.wantErrStr)
@@ -1557,6 +1559,24 @@ func TestValidateOverlayResourcesForNodes(t *testing.T) {
 				t.Errorf("expected no error, but got: %v", err)
 			}
 		})
+	}
+}
+
+func TestValidateOverlayResourcesForNodesStopsWhenTheContextIsDone(t *testing.T) {
+	nodes := []corev1.Node{{ObjectMeta: metav1.ObjectMeta{Name: "node1"}}}
+	duplicates := []v1alpha1.L2VNI{
+		{ObjectMeta: metav1.ObjectMeta{Name: "a"}, Spec: v1alpha1.L2VNISpec{VNI: 100}},
+		{ObjectMeta: metav1.ObjectMeta{Name: "b"}, Spec: v1alpha1.L2VNISpec{VNI: 100}},
+	}
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+
+	err := ValidateOverlayResourcesForNodes(ctx, nodes, duplicates, nil, nil)
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("got %v, want context.Canceled", err)
+	}
+	if strings.Contains(err.Error(), "duplicate") {
+		t.Errorf("got %v, want the context's error alone", err)
 	}
 }
 

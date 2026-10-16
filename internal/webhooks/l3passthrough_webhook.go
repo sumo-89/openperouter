@@ -63,14 +63,14 @@ func (v *L3PassthroughValidator) Handle(ctx context.Context, req admission.Reque
 
 	switch req.Operation {
 	case v1.Create:
-		if err := validateL3PassthroughCreate(&l3passthrough); err != nil {
+		if err := validateL3PassthroughCreate(ctx, &l3passthrough); err != nil {
 			return admission.Denied(err.Error())
 		}
 		if err := DatapathConfigValidator.Validate(conversion.APIConfigData{L3Passthrough: []v1alpha1.L3Passthrough{l3passthrough}}); err != nil {
 			return admission.Denied(err.Error())
 		}
 	case v1.Update:
-		if err := validateL3PassthroughUpdate(&l3passthrough, &oldL3Passthrough); err != nil {
+		if err := validateL3PassthroughUpdate(ctx, &l3passthrough, &oldL3Passthrough); err != nil {
 			return admission.Denied(err.Error())
 		}
 		if err := DatapathConfigValidator.Validate(conversion.APIConfigData{L3Passthrough: []v1alpha1.L3Passthrough{l3passthrough}}); err != nil {
@@ -85,26 +85,26 @@ func (v *L3PassthroughValidator) Handle(ctx context.Context, req admission.Reque
 	return admission.Allowed("")
 }
 
-func validateL3PassthroughCreate(l3passthrough *v1alpha1.L3Passthrough) error {
+func validateL3PassthroughCreate(ctx context.Context, l3passthrough *v1alpha1.L3Passthrough) error {
 	Logger.Debug("webhook l3passthrough", "action", "create", "name", l3passthrough.Name, "namespace", l3passthrough.Namespace)
 	defer Logger.Debug("webhook l3passthrough", "action", "end create", "name", l3passthrough.Name, "namespace", l3passthrough.Namespace)
 
-	return validateL3Passthrough(l3passthrough)
+	return validateL3Passthrough(ctx, l3passthrough)
 }
 
-func validateL3PassthroughUpdate(l3passthrough *v1alpha1.L3Passthrough, _ *v1alpha1.L3Passthrough) error {
+func validateL3PassthroughUpdate(ctx context.Context, l3passthrough *v1alpha1.L3Passthrough, _ *v1alpha1.L3Passthrough) error {
 	Logger.Debug("webhook l3passthrough", "action", "update", "name", l3passthrough.Name, "namespace", l3passthrough.Namespace)
 	defer Logger.Debug("webhook l3passthrough", "action", "end update", "name", l3passthrough.Name, "namespace", l3passthrough.Namespace)
 
-	return validateL3Passthrough(l3passthrough)
+	return validateL3Passthrough(ctx, l3passthrough)
 }
 
 func validateL3PassthroughDelete(_ *v1alpha1.L3Passthrough) error {
 	return nil
 }
 
-func validateL3Passthrough(l3passthrough *v1alpha1.L3Passthrough) error {
-	existingL3Passthroughs, err := getL3Passthroughs()
+func validateL3Passthrough(ctx context.Context, l3passthrough *v1alpha1.L3Passthrough) error {
+	existingL3Passthroughs, err := getL3Passthroughs(ctx)
 	if err != nil {
 		return err
 	}
@@ -123,14 +123,14 @@ func validateL3Passthrough(l3passthrough *v1alpha1.L3Passthrough) error {
 		toValidate = append(toValidate, *l3passthrough.DeepCopy())
 	}
 	nodeList := &corev1.NodeList{}
-	if err := WebhookClient.List(context.Background(), nodeList, &client.ListOptions{}); err != nil {
+	if err := WebhookClient.List(ctx, nodeList, &client.ListOptions{}); err != nil {
 		return fmt.Errorf("failed to get existing Node objects when validating L3Passthrough: %w", err)
 	}
 	if err := conversion.ValidatePassthroughsForNodes(nodeList.Items, toValidate); err != nil {
 		return fmt.Errorf("validation failed: %w", err)
 	}
 
-	l3vnis, err := getL3VNIs()
+	l3vnis, err := getL3VNIs(ctx)
 	if err != nil {
 		return err
 	}
@@ -140,9 +140,9 @@ func validateL3Passthrough(l3passthrough *v1alpha1.L3Passthrough) error {
 	return nil
 }
 
-var getL3Passthroughs = func() (*v1alpha1.L3PassthroughList, error) {
+var getL3Passthroughs = func(ctx context.Context) (*v1alpha1.L3PassthroughList, error) {
 	l3passthroughList := &v1alpha1.L3PassthroughList{}
-	err := WebhookClient.List(context.Background(), l3passthroughList, &client.ListOptions{})
+	err := WebhookClient.List(ctx, l3passthroughList, &client.ListOptions{})
 	if err != nil {
 		return nil, fmt.Errorf("failed to get existing L3Passthrough objects: %w", err)
 	}

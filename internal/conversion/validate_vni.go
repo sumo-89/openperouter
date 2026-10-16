@@ -4,6 +4,7 @@ package conversion
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"fmt"
 	"maps"
@@ -164,10 +165,14 @@ func validateL2VNI(l2Vni v1alpha1.L2VNI) error {
 }
 
 // ValidateOverlayResourcesForNodes validates that the VNI / VPN information as a whole is correct, per Node.
-func ValidateOverlayResourcesForNodes(nodes []corev1.Node, l2vnis []v1alpha1.L2VNI, l3vnis []v1alpha1.L3VNI,
-	l3vpns []v1alpha1.L3VPN) error {
+// It stops, returning the context's error, once ctx is done.
+func ValidateOverlayResourcesForNodes(ctx context.Context, nodes []corev1.Node, l2vnis []v1alpha1.L2VNI,
+	l3vnis []v1alpha1.L3VNI, l3vpns []v1alpha1.L3VPN) error {
 	var errs []error
 	for _, node := range nodes {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
 		if err := validateOverlayResourcesForNode(node, l2vnis, l3vnis, l3vpns); err != nil {
 			errs = append(errs, err)
 		}

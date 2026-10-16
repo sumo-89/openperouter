@@ -340,7 +340,7 @@ func TestValidateL3VPNCreate(t *testing.T) {
 			WebhookClient = client
 			Logger, _ = logging.New("debug")
 
-			err = validateL3VPNCreate(tc.newL3VPN)
+			err = validateL3VPNCreate(t.Context(), tc.newL3VPN)
 			if tc.errorString == "" {
 				if err != nil {
 					t.Fatalf("expected no error, but got %q", err)
@@ -440,7 +440,7 @@ func TestValidateL3VPNUpdate(t *testing.T) {
 			WebhookClient = client
 			Logger, _ = logging.New("debug")
 
-			err = validateL3VPNUpdate(tc.newL3VPN, tc.oldL3VPN)
+			err = validateL3VPNUpdate(t.Context(), tc.newL3VPN, tc.oldL3VPN)
 			if tc.errorString == "" {
 				if err != nil {
 					t.Fatalf("expected no error, but got %q", err)

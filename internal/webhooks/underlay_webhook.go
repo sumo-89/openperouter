@@ -68,14 +68,14 @@ func (v *UnderlayValidator) Handle(ctx context.Context, req admission.Request) (
 
 	switch req.Operation {
 	case v1.Create:
-		if err := validateUnderlayCreate(&underlay); err != nil {
+		if err := validateUnderlayCreate(ctx, &underlay); err != nil {
 			return admission.Denied(err.Error())
 		}
 		if err := DatapathConfigValidator.Validate(conversion.APIConfigData{Underlays: []v1alpha1.Underlay{underlay}}); err != nil {
 			return admission.Denied(err.Error())
 		}
 	case v1.Update:
-		if err := validateUnderlayUpdate(&oldUnderlay, &underlay); err != nil {
+		if err := validateUnderlayUpdate(ctx, &oldUnderlay, &underlay); err != nil {
 			return admission.Denied(err.Error())
 		}
 		if err := DatapathConfigValidator.Validate(conversion.APIConfigData{Underlays: []v1alpha1.Underlay{underlay}}); err != nil {
@@ -90,14 +90,14 @@ func (v *UnderlayValidator) Handle(ctx context.Context, req admission.Request) (
 	return admission.Allowed("")
 }
 
-func validateUnderlayCreate(underlay *v1alpha1.Underlay) error {
+func validateUnderlayCreate(ctx context.Context, underlay *v1alpha1.Underlay) error {
 	Logger.Debug("webhook underlay", "action", "create", "name", underlay.Name, "namespace", underlay.Namespace)
 	defer Logger.Debug("webhook underlay", "action", "end create", "name", underlay.Name, "namespace", underlay.Namespace)
 
-	return validateUnderlay(underlay)
+	return validateUnderlay(ctx, underlay)
 }
 
-func validateUnderlayUpdate(oldUnderlay *v1alpha1.Underlay, newUnderlay *v1alpha1.Underlay) error {
+func validateUnderlayUpdate(ctx context.Context, oldUnderlay *v1alpha1.Underlay, newUnderlay *v1alpha1.Underlay) error {
 	Logger.Debug("webhook underlay", "action", "update", "name", newUnderlay.Name, "namespace", newUnderlay.Namespace)
 	defer Logger.Debug("webhook underlay", "action", "end update", "name", newUnderlay.Name, "namespace", newUnderlay.Namespace)
 
@@ -107,15 +107,15 @@ func validateUnderlayUpdate(oldUnderlay *v1alpha1.Underlay, newUnderlay *v1alpha
 	if err := validateCNIDeviceImmutable(oldUnderlay, newUnderlay); err != nil {
 		return err
 	}
-	return validateUnderlay(newUnderlay)
+	return validateUnderlay(ctx, newUnderlay)
 }
 
 func validateUnderlayDelete(deletedUnderlay *v1alpha1.Underlay) error {
 	return nil
 }
 
-func validateUnderlay(underlay *v1alpha1.Underlay) error {
-	existingUnderlays, err := getUnderlays()
+func validateUnderlay(ctx context.Context, underlay *v1alpha1.Underlay) error {
+	existingUnderlays, err := getUnderlays(ctx)
 	if err != nil {
 		return err
 	}
@@ -134,7 +134,7 @@ func validateUnderlay(underlay *v1alpha1.Underlay) error {
 	}
 
 	nodeList := &corev1.NodeList{}
-	if err := WebhookClient.List(context.Background(), nodeList, &client.ListOptions{}); err != nil {
+	if err := WebhookClient.List(ctx, nodeList, &client.ListOptions{}); err != nil {
 		return fmt.Errorf("failed to get existing Node objects when validating Underlay: %w", err)
 	}
 
@@ -145,9 +145,9 @@ func validateUnderlay(underlay *v1alpha1.Underlay) error {
 	return nil
 }
 
-var getUnderlays = func() (*v1alpha1.UnderlayList, error) {
+var getUnderlays = func(ctx context.Context) (*v1alpha1.UnderlayList, error) {
 	underlayList := &v1alpha1.UnderlayList{}
-	err := WebhookClient.List(context.Background(), underlayList, &client.ListOptions{})
+	err := WebhookClient.List(ctx, underlayList, &client.ListOptions{})
 	if err != nil {
 		return nil, errors.Join(err, errors.New("failed to get existing FRRConfiguration objects"))
 	}
