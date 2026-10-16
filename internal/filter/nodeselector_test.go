@@ -237,3 +237,50 @@ func TestFilterUnderlaysForNode(t *testing.T) {
 		})
 	}
 }
+
+func TestNodeSelectorMatches(t *testing.T) {
+	node := &corev1.Node{ObjectMeta: metav1.ObjectMeta{Labels: map[string]string{"kubernetes.io/hostname": "node-1"}}}
+	tests := []struct {
+		name     string
+		selector *metav1.LabelSelector
+		want     bool
+		wantErr  bool
+	}{
+		{name: "nil selects every node", selector: nil, want: true},
+		{
+			name:     "matching labels",
+			selector: &metav1.LabelSelector{MatchLabels: map[string]string{"kubernetes.io/hostname": "node-1"}},
+			want:     true,
+		},
+		{
+			name:     "other node",
+			selector: &metav1.LabelSelector{MatchLabels: map[string]string{"kubernetes.io/hostname": "node-2"}},
+			want:     false,
+		},
+		{
+			name: "DoesNotExist selects no node",
+			selector: &metav1.LabelSelector{MatchExpressions: []metav1.LabelSelectorRequirement{
+				{Key: "kubernetes.io/hostname", Operator: metav1.LabelSelectorOpDoesNotExist},
+			}},
+			want: false,
+		},
+		{
+			name: "In with no values is an error",
+			selector: &metav1.LabelSelector{MatchExpressions: []metav1.LabelSelectorRequirement{
+				{Key: "kubernetes.io/hostname", Operator: metav1.LabelSelectorOpIn},
+			}},
+			wantErr: true,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := filter.NodeSelectorMatches(node, tt.selector)
+			if (err != nil) != tt.wantErr {
+				t.Fatalf("error = %v, wantErr %v", err, tt.wantErr)
+			}
+			if got != tt.want {
+				t.Fatalf("got %v, want %v", got, tt.want)
+			}
+		})
+	}
+}

@@ -25,6 +25,7 @@ import (
 	"time"
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/selection"
@@ -461,27 +462,99 @@ func (r *PERouterReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		return err
 	}
 
+	onlyMyNode := nodeScopedEventFilter(func() (*v1.Node, error) {
+		node := &v1.Node{}
+		err := r.Get(context.Background(), client.ObjectKey{Name: r.MyNode}, node)
+		return node, err
+	})
+
+	toMyNode := enqueueForNode(r.MyNode)
+
 	builder := ctrl.NewControllerManagedBy(mgr).
-		For(&v1alpha1.Underlay{}).
-		Watches(&v1.Node{}, &handler.EnqueueRequestForObject{}).
-		Watches(&v1.Pod{}, &handler.EnqueueRequestForObject{}).
-		Watches(&v1alpha1.L3VNI{}, &handler.EnqueueRequestForObject{}).
-		Watches(&v1alpha1.L2VNI{}, &handler.EnqueueRequestForObject{}).
-		Watches(&v1alpha1.L3VPN{}, &handler.EnqueueRequestForObject{}).
-		Watches(&v1alpha1.L3Passthrough{}, &handler.EnqueueRequestForObject{}).
-		Watches(&v1alpha1.RawFRRConfig{}, &handler.EnqueueRequestForObject{}).
-		Watches(&v1alpha1.RouterNodeConfigurationStatus{}, &handler.EnqueueRequestForObject{}).
-		Watches(&v1.Secret{}, &handler.EnqueueRequestForObject{}).
+		Named("routercontroller").
+		Watches(&v1alpha1.Underlay{}, toMyNode).
+		Watches(&v1.Node{}, toMyNode).
+		Watches(&v1.Pod{}, toMyNode).
+		Watches(&v1alpha1.L3VNI{}, toMyNode).
+		Watches(&v1alpha1.L2VNI{}, toMyNode).
+		Watches(&v1alpha1.L3VPN{}, toMyNode).
+		Watches(&v1alpha1.L3Passthrough{}, toMyNode).
+		Watches(&v1alpha1.RawFRRConfig{}, toMyNode).
+		Watches(&v1alpha1.RouterNodeConfigurationStatus{}, toMyNode).
+		Watches(&v1.Secret{}, toMyNode).
 		WithEventFilter(filterNonRouterPods).
 		WithEventFilter(filterLocalNodeStatus).
 		WithEventFilter(filterUpdates).
-		Named("routercontroller")
+		WithEventFilter(onlyMyNode)
 
 	if r.TriggerChan != nil {
-		builder = builder.WatchesRawSource(source.Channel(r.TriggerChan, &handler.EnqueueRequestForObject{}))
+		builder = builder.WatchesRawSource(source.Channel(r.TriggerChan, toMyNode))
 	}
 
 	return builder.Complete(r)
+}
+
+// enqueueForNode queues every event under one request, named after the node.
+// A reconcile rebuilds the whole configuration of the node whichever object
+// triggered it, and with one key the workqueue coalesces a burst of events
+// into at most one pass pending behind the running one.
+func enqueueForNode(nodeName string) handler.EventHandler {
+	return handler.EnqueueRequestsFromMapFunc(func(context.Context, client.Object) []ctrl.Request {
+		return []ctrl.Request{{NamespacedName: types.NamespacedName{Name: nodeName}}}
+	})
+}
+
+// nodeScopedEventFilter drops events of node-scoped objects (Underlay, L3VNI,
+// L2VNI, L3VPN, L3Passthrough, RawFRRConfig) whose nodeSelector does not select
+// this node, so that a write concerning one node does not rebuild every node.
+// An update passes if either version selects the node: a node must learn that
+// an object stopped selecting it as well as that one started to.
+//
+// The filter fails open: an object without a nodeSelector, an unreadable node
+// and an unparsable selector all let the event through, and the reconcile
+// decides.
+func nodeScopedEventFilter(getNode func() (*v1.Node, error)) predicate.Funcs {
+	concerns := func(obj client.Object) bool {
+		sel, ok := nodeSelectorOf(obj)
+		if !ok || sel == nil {
+			return true
+		}
+		node, err := getNode()
+		if err != nil {
+			return true
+		}
+		matches, err := filter.NodeSelectorMatches(node, sel)
+		if err != nil {
+			return true
+		}
+		return matches
+	}
+	return predicate.Funcs{
+		CreateFunc: func(e event.CreateEvent) bool { return concerns(e.Object) },
+		DeleteFunc: func(e event.DeleteEvent) bool { return concerns(e.Object) },
+		UpdateFunc: func(e event.UpdateEvent) bool {
+			return concerns(e.ObjectOld) || concerns(e.ObjectNew)
+		},
+		GenericFunc: func(event.GenericEvent) bool { return true },
+	}
+}
+
+func nodeSelectorOf(obj client.Object) (*metav1.LabelSelector, bool) {
+	switch o := obj.(type) {
+	case *v1alpha1.Underlay:
+		return o.Spec.NodeSelector, true
+	case *v1alpha1.L3VNI:
+		return o.Spec.NodeSelector, true
+	case *v1alpha1.L2VNI:
+		return o.Spec.NodeSelector, true
+	case *v1alpha1.L3VPN:
+		return o.Spec.NodeSelector, true
+	case *v1alpha1.L3Passthrough:
+		return o.Spec.NodeSelector, true
+	case *v1alpha1.RawFRRConfig:
+		return o.Spec.NodeSelector, true
+	}
+	return nil, false
 }
 
 func setPodNodeNameIndex(mgr ctrl.Manager) error {

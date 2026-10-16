@@ -52,6 +52,19 @@ func RawFRRConfigsForNode(node *corev1.Node, rawFRRConfigs []v1alpha1.RawFRRConf
 	})
 }
 
+// NodeSelectorMatches tells whether nodeSelector selects the node. A nil
+// selector selects every node.
+func NodeSelectorMatches(node *corev1.Node, nodeSelector *metav1.LabelSelector) (bool, error) {
+	if nodeSelector == nil {
+		return true, nil
+	}
+	labelSelector, err := metav1.LabelSelectorAsSelector(nodeSelector)
+	if err != nil {
+		return false, err
+	}
+	return labelSelector.Matches(labels.Set(node.Labels)), nil
+}
+
 // filterForNode is a generic function that filters items based on node label selectors.
 // It takes a selector function that extracts the NodeSelector from each item.
 func filterForNode[T any](node *corev1.Node, items []T, getSelector func(T) *metav1.LabelSelector) ([]T, error) {
