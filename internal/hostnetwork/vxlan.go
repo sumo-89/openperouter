@@ -73,10 +73,13 @@ func checkVXLanConfigured(vxLan *netlink.Vxlan, bridgeIndex, loopbackIndex int, 
 }
 
 func createVXLan(params VNIParams, bridge *netlink.Bridge) (*netlink.Vxlan, error) {
-	loopback, err := net.InterfaceByName(loopbackName)
+	// net.InterfaceByName dumps every link of the namespace; LinkByName asks
+	// the kernel for this one.
+	loopbackLink, err := netlink.LinkByName(loopbackName)
 	if err != nil {
 		return nil, fmt.Errorf("failed looking for vtep loopback interface %s: %w", loopbackName, err)
 	}
+	loopback := loopbackLink.Attrs()
 
 	vtepIP, _, err := net.ParseCIDR(params.VTEPIP)
 	if err != nil {
