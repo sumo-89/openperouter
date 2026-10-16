@@ -135,7 +135,16 @@ func SetupL3VNI(ctx context.Context, params L3VNIParams) error {
 // The VRF must already exist (created by SetupL3VNI); setupBridge
 // looks it up and binds the bridge to it.
 func SetupL2VNI(ctx context.Context, params L2VNIParams) error {
-	if err := setupVNI(ctx, params.VNIParams); err != nil {
+	var bridgeOptions []NetlinkOption
+	if len(params.L2GatewayIPs) > 0 {
+		// Set before any port is enslaved: changing the MAC of a bridge whose
+		// VXLAN port has a remote FDB entry for that MAC replaces the entry with
+		// a local one behind zebra's back.
+		bridgeOptions = append(bridgeOptions, func(bridge netlink.Link) error {
+			return ensureBridgeFixedMacAddress(bridge, params.VNI)
+		})
+	}
+	if err := setupVNI(ctx, params.VNIParams, bridgeOptions...); err != nil {
 		return fmt.Errorf("SetupL2VNI: failed to setup VNI: %w", err)
 	}
 	vethNames := vethNamesFromVNI(params.VNI)
@@ -212,11 +221,6 @@ func setupL2VNIRouterSide(params L2VNIParams, vethName string, underlayMTU int) 
 			if err := AssignIPToInterface(bridge, ip); err != nil {
 				return fmt.Errorf("failed to assign L2 gateway IP %s to bridge %s: %w", ip, name, err)
 			}
-		}
-
-		// setting up the same mac address for all the nodes for distributed gateway
-		if err := ensureBridgeFixedMacAddress(bridge, params.VNI); err != nil {
-			return fmt.Errorf("failed to set bridge mac address %s: %v", name, err)
 		}
 	}
 	return nil
