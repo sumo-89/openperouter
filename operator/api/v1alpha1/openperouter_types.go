@@ -77,6 +77,35 @@ type OpenPERouterSpec struct {
 	// +default="kernel"
 	// +kubebuilder:validation:Enum=kernel;grout
 	Datapath *string `json:"datapath,omitempty"`
+	// priorityClassName is the priority class of all openperouter pods
+	// (router, controller, nodemarker, hostbridge). The router carries the
+	// node's traffic and the nodemarker serves the validating webhooks, so
+	// system-node-critical or system-cluster-critical is the class to use:
+	// the kubelet's node-pressure eviction and the descheduler leave pods of
+	// these classes alone.
+	// +optional
+	PriorityClassName *string `json:"priorityClassName,omitempty"`
+	// resources overrides the resource requirements of the openperouter
+	// containers. A container left unset keeps the chart's defaults.
+	// +optional
+	Resources *ContainerResources `json:"resources,omitempty"`
+}
+
+// ContainerResources holds the resource requirements of the openperouter
+// containers.
+type ContainerResources struct {
+	// controller is the controller container of the controller pods.
+	// +optional
+	Controller *corev1.ResourceRequirements `json:"controller,omitempty"`
+	// nodemarker is the nodemarker container, which serves the webhooks.
+	// +optional
+	NodeMarker *corev1.ResourceRequirements `json:"nodemarker,omitempty"`
+	// frr is the frr container of the router pods.
+	// +optional
+	FRR *corev1.ResourceRequirements `json:"frr,omitempty"`
+	// reloader is the reloader container of the router pods.
+	// +optional
+	Reloader *corev1.ResourceRequirements `json:"reloader,omitempty"`
 }
 
 // OpenPERouterStatus defines the observed state of OpenPERouter

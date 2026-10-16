@@ -38,8 +38,52 @@ func TestParseChartResourceDefaults(t *testing.T) {
 	}
 }
 
+func TestParseChartPriorityClassName(t *testing.T) {
+	g := NewGomegaWithT(t)
+	specs := renderPodSpecs(g, operatorapi.OpenPERouterSpec{PriorityClassName: new("system-node-critical")})
+
+	for _, name := range []string{routerDaemonSetName, controllerDaemonSetName, nodemarkerDeploymentName} {
+		g.Expect(specs).To(HaveKey(name))
+		g.Expect(specs[name].PriorityClassName).To(Equal("system-node-critical"), name)
+	}
+}
+
+func TestParseChartResourceOverrides(t *testing.T) {
+	g := NewGomegaWithT(t)
+	overridden := v1.ResourceRequirements{
+		Requests: v1.ResourceList{v1.ResourceCPU: resource.MustParse("1"), v1.ResourceMemory: resource.MustParse("512Mi")},
+		Limits:   v1.ResourceList{v1.ResourceMemory: resource.MustParse("2Gi")},
+	}
+	specs := renderPodSpecs(g, operatorapi.OpenPERouterSpec{
+		HealthProbePort: new(int32(9999)),
+		Resources: &operatorapi.ContainerResources{
+			Controller: &overridden,
+			NodeMarker: &overridden,
+			Reloader:   &overridden,
+		},
+	})
+
+	for name, c := range map[string]*v1.Container{
+		"controller": findContainer(specs[controllerDaemonSetName], "controller"),
+		"nodemarker": findContainer(specs[nodemarkerDeploymentName], "nodemarker"),
+		"reloader":   findContainer(specs[routerDaemonSetName], "reloader"),
+	} {
+		g.Expect(c).ToNot(BeNil(), name)
+		g.Expect(equalResourceLists(c.Resources.Requests, overridden.Requests)).To(BeTrue(), "%s requests: %v", name, c.Resources.Requests)
+		g.Expect(equalResourceLists(c.Resources.Limits, overridden.Limits)).To(BeTrue(), "%s limits: %v", name, c.Resources.Limits)
+	}
+	frr := findContainer(specs[routerDaemonSetName], "frr")
+	g.Expect(frr).ToNot(BeNil())
+	g.Expect(equalResourceLists(frr.Resources.Requests, v1.ResourceList{
+		v1.ResourceCPU: resource.MustParse("250m"), v1.ResourceMemory: resource.MustParse("256Mi"),
+	})).To(BeTrue(), "frr keeps the chart default: %v", frr.Resources.Requests)
+
+	controller := findContainer(specs[controllerDaemonSetName], "controller")
+	g.Expect(controller.Args).To(ContainElement(ContainSubstring("9999")), "the controller's other values are kept")
+}
+
 // renderPodSpecs renders the chart through the operator and returns the pod
-// specs of the router, controller and hostbridge DaemonSets and of the
+// specs of the DaemonSets and of the
 // nodemarker Deployment, keyed by name.
 func renderPodSpecs(g Gomega, spec operatorapi.OpenPERouterSpec) map[string]v1.PodSpec {
 	chart, err := NewChart(testChartPath, openperouterChartName, openperouterTestNamespace)
