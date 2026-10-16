@@ -66,6 +66,10 @@ type PERouterReconciler struct {
 	// TriggerChan receives events from FileWatcher (in host mode)
 	TriggerChan chan event.GenericEvent
 
+	// WatchOVSPorts starts a pass when OVSDB shows the host port of an L2VNI
+	// deleted or broken by something other than the controller.
+	WatchOVSPorts bool
+
 	// notStaticConfigsListOpts filters out mirrored resources (source=static) when listing CRDs.
 	// Built once in SetupWithManager since the label is const.
 	notStaticConfigsListOpts *client.ListOptions
@@ -493,6 +497,17 @@ func (r *PERouterReconciler) SetupWithManager(mgr ctrl.Manager) error {
 
 	if r.TriggerChan != nil {
 		builder = builder.WatchesRawSource(source.Channel(r.TriggerChan, toMyNode))
+	}
+
+	repairEvents := make(chan event.GenericEvent, 1)
+	repairRunnables := r.repairRunnables(repairEvents)
+	for _, runnable := range repairRunnables {
+		if err := mgr.Add(runnable); err != nil {
+			return fmt.Errorf("failed to add the host repair runnable: %w", err)
+		}
+	}
+	if len(repairRunnables) > 0 {
+		builder = builder.WatchesRawSource(source.Channel(repairEvents, toMyNode))
 	}
 
 	return builder.Complete(r)

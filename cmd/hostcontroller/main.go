@@ -134,6 +134,7 @@ type parameters struct {
 	cniCacheDir     string
 	datapath        string
 	groutSocketPath string
+	watchOVSPorts   bool
 }
 
 func main() {
@@ -149,6 +150,8 @@ func main() {
 		"the location of the frr configuration file")
 	flag.StringVar(&args.ovsSocketPath, "ovssocket", "unix:/var/run/openvswitch/db.sock",
 		"the OVS database socket path")
+	flag.BoolVar(&args.watchOVSPorts, "ovs-port-watch", true,
+		"reconcile the node when OVSDB shows an L2VNI host port deleted or broken by something else")
 
 	flag.StringVar(&args.mode, "mode", modeK8s, "the mode to run in (k8s or host)")
 
@@ -392,6 +395,7 @@ func runK8sConfigReconcilerHostMode(ctx context.Context,
 		NodeConfigPath:       hostModeParams.nodeConfigPath,
 		TriggerChan:          triggerChan,
 		DatapathConfigurator: datapathConfigurator,
+		WatchOVSPorts:        args.watchOVSPorts,
 	}
 
 	if err := apiReconciler.SetupWithManager(mgr); err != nil {
@@ -498,6 +502,7 @@ func runK8sConfigReconciler(ctx context.Context,
 		MyNamespace:          args.namespace,
 		DatapathConfigurator: datapathConfigurator,
 		TriggerChan:          triggerChan,
+		WatchOVSPorts:        args.watchOVSPorts,
 	}
 
 	if err := apiReconciler.SetupWithManager(mgr); err != nil {
