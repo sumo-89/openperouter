@@ -3,6 +3,9 @@
 package filter
 
 import (
+	"errors"
+	"fmt"
+
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/labels"
@@ -50,6 +53,29 @@ func RawFRRConfigsForNode(node *corev1.Node, rawFRRConfigs []v1alpha1.RawFRRConf
 	return filterForNode(node, rawFRRConfigs, func(r v1alpha1.RawFRRConfig) *metav1.LabelSelector {
 		return r.Spec.NodeSelector
 	})
+}
+
+// DropUnparsableSelectors returns the items whose nodeSelector can be parsed,
+// and an error naming each item whose selector cannot. The ForNode filters
+// fail as a whole on such an item, which is what admission wants; a
+// reconcile wants to go on with the other items instead.
+func DropUnparsableSelectors[T any](items []T, getSelector func(T) *metav1.LabelSelector,
+	getName func(T) string) ([]T, error) {
+	valid := make([]T, 0, len(items))
+	var errs []error
+	for _, item := range items {
+		sel := getSelector(item)
+		if sel == nil {
+			valid = append(valid, item)
+			continue
+		}
+		if _, err := metav1.LabelSelectorAsSelector(sel); err != nil {
+			errs = append(errs, fmt.Errorf("%s: invalid nodeSelector: %w", getName(item), err))
+			continue
+		}
+		valid = append(valid, item)
+	}
+	return valid, errors.Join(errs...)
 }
 
 // filterForNode is a generic function that filters items based on node label selectors.

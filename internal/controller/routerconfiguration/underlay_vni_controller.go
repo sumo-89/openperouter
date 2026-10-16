@@ -25,6 +25,7 @@ import (
 	"time"
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/selection"
@@ -248,6 +249,29 @@ func (r *PERouterReconciler) getConfigFromAPI(ctx context.Context, logger *slog.
 		return conversion.APIConfigData{}, err
 	}
 
+	// An object whose nodeSelector cannot be parsed selects no node. Without
+	// dropping it first the filters below fail, and the node reconciles none
+	// of its objects. Admission refuses such selectors, so this only matters
+	// for objects that got past it.
+	underlays.Items = withParsableSelectors(logger, "Underlay", underlays.Items,
+		func(o v1alpha1.Underlay) *metav1.LabelSelector { return o.Spec.NodeSelector },
+		func(o v1alpha1.Underlay) string { return o.Name })
+	l3vnis.Items = withParsableSelectors(logger, "L3VNI", l3vnis.Items,
+		func(o v1alpha1.L3VNI) *metav1.LabelSelector { return o.Spec.NodeSelector },
+		func(o v1alpha1.L3VNI) string { return o.Name })
+	l2vnis.Items = withParsableSelectors(logger, "L2VNI", l2vnis.Items,
+		func(o v1alpha1.L2VNI) *metav1.LabelSelector { return o.Spec.NodeSelector },
+		func(o v1alpha1.L2VNI) string { return o.Name })
+	l3vpns.Items = withParsableSelectors(logger, "L3VPN", l3vpns.Items,
+		func(o v1alpha1.L3VPN) *metav1.LabelSelector { return o.Spec.NodeSelector },
+		func(o v1alpha1.L3VPN) string { return o.Name })
+	l3passthrough.Items = withParsableSelectors(logger, "L3Passthrough", l3passthrough.Items,
+		func(o v1alpha1.L3Passthrough) *metav1.LabelSelector { return o.Spec.NodeSelector },
+		func(o v1alpha1.L3Passthrough) string { return o.Name })
+	rawFRRConfigs.Items = withParsableSelectors(logger, "RawFRRConfig", rawFRRConfigs.Items,
+		func(o v1alpha1.RawFRRConfig) *metav1.LabelSelector { return o.Spec.NodeSelector },
+		func(o v1alpha1.RawFRRConfig) string { return o.Name })
+
 	// Filter resources by node selector
 	filteredUnderlays, err := filter.UnderlaysForNode(node, underlays.Items)
 	if err != nil {
@@ -306,6 +330,15 @@ func (r *PERouterReconciler) getConfigFromAPI(ctx context.Context, logger *slog.
 	}
 
 	return apiConfig, nil
+}
+
+func withParsableSelectors[T any](logger *slog.Logger, kind string, items []T,
+	getSelector func(T) *metav1.LabelSelector, getName func(T) string) []T {
+	valid, err := filter.DropUnparsableSelectors(items, getSelector, getName)
+	if err != nil {
+		logger.Error("ignoring objects whose nodeSelector cannot be parsed", "kind", kind, "error", err)
+	}
+	return valid
 }
 
 func (r *PERouterReconciler) resolvePasswordSecrets(ctx context.Context, config *conversion.APIConfigData) error {

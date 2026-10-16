@@ -3,6 +3,7 @@
 package filter_test
 
 import (
+	"strings"
 	"testing"
 
 	corev1 "k8s.io/api/core/v1"
@@ -235,5 +236,35 @@ func TestFilterUnderlaysForNode(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestDropUnparsableSelectors(t *testing.T) {
+	emptyIn := &metav1.LabelSelector{MatchExpressions: []metav1.LabelSelectorRequirement{
+		{Key: "kubernetes.io/hostname", Operator: metav1.LabelSelectorOpIn},
+	}}
+	items := []v1alpha1.L2VNI{
+		{ObjectMeta: metav1.ObjectMeta{Name: "no-selector"}},
+		{ObjectMeta: metav1.ObjectMeta{Name: "broken"}, Spec: v1alpha1.L2VNISpec{NodeSelector: emptyIn}},
+		{ObjectMeta: metav1.ObjectMeta{Name: "fine"}, Spec: v1alpha1.L2VNISpec{NodeSelector: &metav1.LabelSelector{
+			MatchLabels: map[string]string{"kubernetes.io/hostname": "node-1"},
+		}}},
+	}
+
+	valid, err := filter.DropUnparsableSelectors(items,
+		func(v v1alpha1.L2VNI) *metav1.LabelSelector { return v.Spec.NodeSelector },
+		func(v v1alpha1.L2VNI) string { return v.Name })
+
+	if err == nil || !strings.Contains(err.Error(), "broken") {
+		t.Fatalf("expected an error naming the broken item, got %v", err)
+	}
+	if len(valid) != 2 || valid[0].Name != "no-selector" || valid[1].Name != "fine" {
+		t.Fatalf("expected the two parsable items in order, got %v", valid)
+	}
+
+	// Admission relies on the ForNode filters failing on such a selector.
+	node := &corev1.Node{ObjectMeta: metav1.ObjectMeta{Labels: map[string]string{"kubernetes.io/hostname": "node-1"}}}
+	if _, err := filter.L2VNIsForNode(node, items); err == nil {
+		t.Fatal("L2VNIsForNode must still fail on an unparsable selector")
 	}
 }
