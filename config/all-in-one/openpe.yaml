@@ -2646,18 +2646,18 @@ spec:
               exit 1
             fi
           done
-          exec nsenter --net=/var/run/netns/perouter /sbin/tini -- /usr/lib/frr/docker-start
+          exec nsenter --net=/var/run/netns/perouter /sbin/tini -- /usr/lib/frr/openperouter/frr-start
         env:
         - name: TINI_SUBREAPER
           value: "true"
         image: quay.io/openperouter/router:main
         imagePullPolicy: IfNotPresent
         livenessProbe:
+          exec:
+            command:
+            - /usr/lib/frr/openperouter/frr-alive
           failureThreshold: 3
-          httpGet:
-            path: /healthz
-            port: 9080
-          initialDelaySeconds: 15
+          initialDelaySeconds: 30
           periodSeconds: 20
           timeoutSeconds: 10
         name: frr
@@ -2673,6 +2673,8 @@ spec:
             - SETGID
             - CHOWN
             - DAC_OVERRIDE
+            # frr-restart kills the surviving daemons (user frr) when zebra dies.
+            - KILL
             drop:
             - ALL
           seccompProfile:

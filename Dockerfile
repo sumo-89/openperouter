@@ -71,6 +71,8 @@ COPY --from=cni-plugins-builder /cni-plugins/bin/dhcp /opt/openperouter/cni/bin/
 COPY systemdmode/frrconfig/daemons /etc/frr/daemons
 COPY systemdmode/frrconfig/vtysh.conf /etc/frr/vtysh.conf
 COPY systemdmode/frrconfig/frr.conf /etc/frr/frr.conf
+# The frr container's entrypoint and watchfrr's restart command (see the scripts).
+COPY frr-tools/frr-start frr-tools/frr-restart frr-tools/frr-lib frr-tools/frr-alive /usr/lib/frr/openperouter/
 
 # Hack for https://github.com/FRRouting/frr/issues/20355
 #          https://github.com/FRRouting/frr/pull/20378 

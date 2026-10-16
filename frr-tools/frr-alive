@@ -1,0 +1,13 @@
+#!/bin/bash
+# SPDX-License-Identifier:Apache-2.0
+#
+# The frr container's liveness: watchfrr runs and answers on its vty. Dead
+# daemons are watchfrr's to restart; a hung watchfrr is what only a container
+# restart cures.
+
+# frr-start has not started watchfrr yet (it may still be waiting for the
+# router netns).
+pid=$(cat /var/run/frr/frr-start.watchfrr.pid 2>/dev/null) || exit 0
+kill -0 "$pid" 2>/dev/null || { echo "watchfrr $pid is not running"; exit 1; }
+timeout 5 vtysh -d watchfrr -c "show watchfrr" >/dev/null 2>&1 ||
+	{ echo "watchfrr $pid does not answer on its vty"; exit 1; }

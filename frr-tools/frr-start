@@ -1,0 +1,54 @@
+#!/bin/bash
+# SPDX-License-Identifier:Apache-2.0
+#
+# The frr container's entrypoint: FRR's docker-start, with frr-restart as
+# watchfrr's restart command. Exits non-zero when frr-restart could not
+# repair the stack in place, so that the container restarts.
+
+log_success_msg() { echo "$@"; }
+log_warning_msg() { echo "$@" >&2; }
+log_failure_msg() { echo "$@" >&2; }
+
+# shellcheck source=/dev/null
+source /usr/lib/frr/frrcommon.sh
+# shellcheck source=frr-lib
+. /usr/lib/frr/openperouter/frr-lib
+
+# /var/run/frr outlives the container.
+rm -f "$reason" "$watchfrr_pidfile"
+
+# The pod shares its PID namespace, so the processes of a previous frr
+# container can still be running and holding their pid-file locks, which
+# would make the new daemons refuse to start.
+# shellcheck disable=SC2046
+left=$(frr_pids watchfrr $(frr_names))
+if [ -n "$left" ]; then
+	# shellcheck disable=SC2086
+	echo "frr-start: killing $(describe $left)left from the previous frr container"
+	# shellcheck disable=SC2046
+	if ! why=$(kill_and_wait watchfrr $(frr_names)); then
+		echo "frr-start: $why" >&2
+		exit 1
+	fi
+fi
+
+# While zebra is down nothing is programmed into the kernel, so the restart
+# back-off is shorter than FRR's default (60 s, growing to 600 s).
+# shellcheck disable=SC2046
+/usr/lib/frr/watchfrr --restart "/usr/lib/frr/openperouter/frr-restart %s" \
+	--min-restart-interval 5 --max-restart-interval 60 $(daemon_list) &
+watchfrr=$!
+echo "$watchfrr" >"$watchfrr_pidfile"
+
+trap 'kill -TERM "$watchfrr" 2>/dev/null' TERM INT
+rc=0
+while kill -0 "$watchfrr" 2>/dev/null; do
+	wait "$watchfrr"
+	rc=$?
+done
+
+if [ -s "$reason" ]; then
+	echo "frr-start: $(cat "$reason"); exiting so that the container restarts" >&2
+	exit 1
+fi
+exit "$rc"

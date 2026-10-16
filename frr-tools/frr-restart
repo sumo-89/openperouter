@@ -1,0 +1,38 @@
+#!/bin/bash
+# SPDX-License-Identifier:Apache-2.0
+#
+# watchfrr's restart command in the router pod's frr container.
+#
+# watchfrr calls "restart all" when zebra dies, because the other daemons do
+# not replay their state into a new zebra. The surviving daemons are killed
+# with SIGKILL, as a pod restart would, so that none of them tears down a
+# session or withdraws a route on its way out; watchfrr.sh then starts the
+# whole stack from /etc/frr/frr.conf. The daemons run as frr and watchfrr as
+# root, so this needs CAP_KILL.
+#
+# If the survivors cannot be stopped, the reason is recorded and watchfrr is
+# stopped, so that frr-start exits and the container restarts.
+
+watchfrr_sh=/usr/lib/frr/watchfrr.sh
+# shellcheck source=frr-lib
+. /usr/lib/frr/openperouter/frr-lib
+
+give_up() {
+	echo "frr-restart: $1" >&2
+	echo "$1" >"$reason"
+	kill -TERM "$(cat "$watchfrr_pidfile")"
+	exit 1
+}
+
+if [ "$1" = "all" ]; then
+	# shellcheck disable=SC2046
+	pids=$(frr_pids $(frr_names))
+	if [ -n "$pids" ]; then
+		# shellcheck disable=SC2086
+		echo "frr-restart: zebra died; killing $(describe $pids)so that the whole stack restarts" >&2
+		# shellcheck disable=SC2046
+		why=$(kill_and_wait $(frr_names)) || give_up "zebra died and the surviving daemons cannot be stopped: $why"
+	fi
+fi
+
+exec "$watchfrr_sh" restart "$@"

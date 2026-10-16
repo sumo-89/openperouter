@@ -207,11 +207,11 @@ func allNodes(cs clientset.Interface) map[string]bool {
 	return result
 }
 
-// killFRREntrypoint kills the tini/docker-start entrypoint process inside the given FRR container.
+// killFRREntrypoint kills the tini/frr-start entrypoint process inside the given FRR container.
 // A DeferCleanup is NOT registered; callers are responsible for waiting on pod restart.
 func killFRREntrypoint(frrExec executor.Executor) {
 	GinkgoHelper()
-	psOut, err := frrExec.Exec("pgrep", "-f", "/sbin/tini -- /usr/lib/frr/docker-start")
+	psOut, err := frrExec.Exec("pgrep", "-f", "/sbin/tini -- /usr/lib/frr/openperouter/frr-start")
 	Expect(err).NotTo(HaveOccurred(), "failed to find FRR entrypoint PID")
 	pids := strings.Split(strings.TrimSpace(psOut), "\n")
 	Expect(pids).NotTo(BeEmpty(), "FRR entrypoint PID should not be empty")
