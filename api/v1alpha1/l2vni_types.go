@@ -186,6 +186,24 @@ type OVSBridgeConfig struct {
 	// +kubebuilder:validation:MaxLength=15
 	// +optional
 	Name *string `json:"name,omitempty"`
+
+	// vlanID is the VLAN this L2VNI uses on the OVS bridge. The veth is
+	// attached as an access port for this VLAN: frames the bridge forwards in
+	// this VLAN reach the L2VNI untagged, and frames from the L2VNI enter the
+	// bridge in this VLAN. This lets several L2VNIs share one bridge, for
+	// example an External bridge that also carries OVN-Kubernetes localnet
+	// networks, one VLAN each.
+	// The VLAN is set in the same transaction that creates the port, so the
+	// port never forwards untagged. An existing port whose vlan_mode is not
+	// access (for example trunk) is switched to access, and its previous mode
+	// is restored when the field is removed. Removing the field clears a VLAN
+	// the controller set, unless the port has been re-tagged by other means
+	// since; a VLAN set on the port by other means is left untouched while
+	// the field is unset.
+	// +kubebuilder:validation:Minimum=1
+	// +kubebuilder:validation:Maximum=4094
+	// +optional
+	VLANID *int32 `json:"vlanID,omitempty"`
 }
 
 // +union

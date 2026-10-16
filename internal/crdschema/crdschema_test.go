@@ -410,6 +410,21 @@ func TestValidateSuccessful(t *testing.T) {
 			}),
 		},
 		{
+			name: "L2VNI with OVSBridge External lifecycle and vlanID",
+			gvk:  l2vniGVK,
+			obj: newUnstructured("L2VNI", map[string]any{
+				"vni": int64(100),
+				"hostMaster": map[string]any{
+					"type": "OVSBridge",
+					"ovsBridge": map[string]any{
+						"name":      "br-data",
+						"lifecycle": "External",
+						"vlanID":    int64(4094),
+					},
+				},
+			}),
+		},
+		{
 			name: "L2VNI HostMaster type linux-bridge with linuxBridge field",
 			gvk:  l2vniGVK,
 			obj: newUnstructured("L2VNI", map[string]any{
@@ -593,6 +608,36 @@ func TestValidateFailure(t *testing.T) {
 				},
 			}),
 			errSubstr: "name must be set when lifecycle is External, and must not be set when it is Managed.",
+		},
+		{
+			name: "OVSBridge with vlanID 0",
+			gvk:  l2vniGVK,
+			obj: newUnstructured("L2VNI", map[string]any{
+				"hostMaster": map[string]any{
+					"type": "OVSBridge",
+					"ovsBridge": map[string]any{
+						"name":      "br-data",
+						"lifecycle": "External",
+						"vlanID":    int64(0),
+					},
+				},
+			}),
+			errSubstr: "should be greater than or equal to 1",
+		},
+		{
+			name: "OVSBridge with vlanID above 4094",
+			gvk:  l2vniGVK,
+			obj: newUnstructured("L2VNI", map[string]any{
+				"hostMaster": map[string]any{
+					"type": "OVSBridge",
+					"ovsBridge": map[string]any{
+						"name":      "br-data",
+						"lifecycle": "External",
+						"vlanID":    int64(4095),
+					},
+				},
+			}),
+			errSubstr: "should be less than or equal to 4094",
 		},
 		{
 			name: "HostMaster type linux-bridge with ovsBridge field",
