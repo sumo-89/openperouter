@@ -135,6 +135,7 @@ type parameters struct {
 	datapath        string
 	groutSocketPath string
 	watchOVSPorts   bool
+	resyncPeriod    time.Duration
 }
 
 func main() {
@@ -152,6 +153,8 @@ func main() {
 		"the OVS database socket path")
 	flag.BoolVar(&args.watchOVSPorts, "ovs-port-watch", true,
 		"reconcile the node when OVSDB shows an L2VNI host port deleted or broken by something else")
+	flag.DurationVar(&args.resyncPeriod, "resync-period", 5*time.Minute,
+		"reconcile the node at least this often, to repair host state changed behind the controller (0 disables)")
 
 	flag.StringVar(&args.mode, "mode", modeK8s, "the mode to run in (k8s or host)")
 
@@ -396,6 +399,7 @@ func runK8sConfigReconcilerHostMode(ctx context.Context,
 		TriggerChan:          triggerChan,
 		DatapathConfigurator: datapathConfigurator,
 		WatchOVSPorts:        args.watchOVSPorts,
+		ResyncPeriod:         args.resyncPeriod,
 	}
 
 	if err := apiReconciler.SetupWithManager(mgr); err != nil {
@@ -503,6 +507,7 @@ func runK8sConfigReconciler(ctx context.Context,
 		DatapathConfigurator: datapathConfigurator,
 		TriggerChan:          triggerChan,
 		WatchOVSPorts:        args.watchOVSPorts,
+		ResyncPeriod:         args.resyncPeriod,
 	}
 
 	if err := apiReconciler.SetupWithManager(mgr); err != nil {

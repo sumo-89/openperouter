@@ -29,9 +29,9 @@ func TestRepairRunnables(t *testing.T) {
 	if got := (&PERouterReconciler{}).repairRunnables(events); len(got) != 0 {
 		t.Fatalf("expected no runnables by default, got %d", len(got))
 	}
-	got := (&PERouterReconciler{WatchOVSPorts: true}).repairRunnables(events)
-	if len(got) != 1 {
-		t.Fatalf("expected one runnable, got %d", len(got))
+	got := (&PERouterReconciler{WatchOVSPorts: true, ResyncPeriod: time.Minute}).repairRunnables(events)
+	if len(got) != 2 {
+		t.Fatalf("expected two runnables, got %d", len(got))
 	}
 	watch, ok := got[0].(*ovsPortWatch)
 	if !ok {
@@ -39,6 +39,40 @@ func TestRepairRunnables(t *testing.T) {
 	}
 	if watch.minGap != minOVSRepairGap {
 		t.Fatalf("expected the watch to space its passes by %v, got %v", minOVSRepairGap, watch.minGap)
+	}
+	resync, ok := got[1].(*periodicResync)
+	if !ok {
+		t.Fatalf("expected the periodic resync, got %T", got[1])
+	}
+	if resync.period != time.Minute {
+		t.Fatalf("expected a resync every minute, got %v", resync.period)
+	}
+}
+
+func TestPeriodicResyncQueuesTheNodeEveryPeriod(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	events := make(chan event.GenericEvent, 1)
+	resync := &periodicResync{period: 20 * time.Millisecond, events: events}
+	resyncDone := make(chan error)
+	go func() { resyncDone <- resync.Start(ctx) }()
+
+	for i := range 3 {
+		select {
+		case <-events:
+		case <-time.After(5 * time.Second):
+			t.Fatalf("no resync event %d", i+1)
+		}
+	}
+
+	cancel()
+	select {
+	case err := <-resyncDone:
+		if err != nil {
+			t.Fatalf("expected the resync to stop cleanly, got %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("the resync did not stop with its context")
 	}
 }
 

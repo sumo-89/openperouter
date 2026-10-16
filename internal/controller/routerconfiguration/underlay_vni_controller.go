@@ -70,6 +70,10 @@ type PERouterReconciler struct {
 	// deleted or broken by something other than the controller.
 	WatchOVSPorts bool
 
+	// ResyncPeriod, when not zero, starts a pass at least this often, for
+	// host state changed behind the controller's back that nothing watches.
+	ResyncPeriod time.Duration
+
 	// notStaticConfigsListOpts filters out mirrored resources (source=static) when listing CRDs.
 	// Built once in SetupWithManager since the label is const.
 	notStaticConfigsListOpts *client.ListOptions

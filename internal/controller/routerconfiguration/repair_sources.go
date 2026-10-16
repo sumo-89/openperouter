@@ -26,6 +26,9 @@ func (r *PERouterReconciler) repairRunnables(events chan<- event.GenericEvent) [
 			events: events, watch: hostnetwork.WatchL2VNIHostPorts, minGap: minOVSRepairGap,
 		})
 	}
+	if r.ResyncPeriod > 0 {
+		runnables = append(runnables, &periodicResync{period: r.ResyncPeriod, events: events})
+	}
 	return runnables
 }
 
@@ -84,6 +87,31 @@ func (w *ovsPortWatch) forward(ctx context.Context, changed <-chan struct{}, cha
 
 // NeedLeaderElection is false: every node's controller repairs its own host.
 func (w *ovsPortWatch) NeedLeaderElection() bool {
+	return false
+}
+
+// periodicResync starts a pass every period, as a backstop for host state
+// that changes behind the controller's back and that nothing watches.
+type periodicResync struct {
+	period time.Duration
+	events chan<- event.GenericEvent
+}
+
+func (p *periodicResync) Start(ctx context.Context) error {
+	ticker := time.NewTicker(p.period)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return nil
+		case <-ticker.C:
+			notifyNode(p.events, "periodic-resync")
+		}
+	}
+}
+
+// NeedLeaderElection is false: every node's controller repairs its own host.
+func (p *periodicResync) NeedLeaderElection() bool {
 	return false
 }
 
