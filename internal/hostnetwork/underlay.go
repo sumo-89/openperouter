@@ -365,6 +365,20 @@ func FindInterfacesInGroup(ns netns.NsHandle, groupID uint32) ([]string, error) 
 	return result, err
 }
 
+// FindUnderlayMTUAt is FindUnderlayMTU for the namespace at the given path.
+func FindUnderlayMTUAt(targetNS string) (int, error) {
+	ns, err := netns.GetFromPath(targetNS)
+	if err != nil {
+		return 0, fmt.Errorf("failed to get network namespace %s: %w", targetNS, err)
+	}
+	defer func() {
+		if err := ns.Close(); err != nil {
+			slog.Error("failed to close namespace", "namespace", targetNS, "error", err)
+		}
+	}()
+	return FindUnderlayMTU(ns)
+}
+
 // FindUnderlayMTU retrieves the lowest MTU among all underlay interfaces.
 // This ensures that packets can traverse all underlay paths.
 func FindUnderlayMTU(ns netns.NsHandle) (int, error) {

@@ -580,6 +580,38 @@ var _ = Describe("L2 VNI configuration", func() {
 		}, 30*time.Second, 1*time.Second).Should(Succeed())
 	})
 
+	It("should use the underlay MTU passed in the params instead of looking it up", func() {
+		// No fake underlay is set up here: a lookup would find none and
+		// leave the default MTU, so the expected MTU can only come from
+		// the params.
+		const underlayMTU = 9000
+		params := L2VNIParams{
+			VNIParams: VNIParams{
+				VRF:            "testred",
+				TargetNS:       testNSPath(),
+				VTEPIP:         "192.170.0.9/32",
+				VNI:            100,
+				VXLanPort:      new(int32(4789)),
+				TunnelOverhead: VXLanOverhead,
+			},
+			L2GatewayIPs: []string{"192.168.1.0/24"},
+			UnderlayMTU:  underlayMTU,
+		}
+
+		createVRFInNamespace(testNS, params.VRF)
+		Expect(SetupL2VNI(context.Background(), params)).To(Succeed())
+
+		expectedMTU := underlayMTU - VXLanOverhead
+		Eventually(func(g Gomega) {
+			vethNames := vethNamesFromVNI(params.VNI)
+			validateVethMTU(g, vethNames, expectedMTU)
+			_ = netnamespace.In(testNS, func() error {
+				validateNSVethMTU(g, vethNames, expectedMTU)
+				return nil
+			})
+		}, 30*time.Second, 1*time.Second).Should(Succeed())
+	})
+
 	It("should leave veth MTU at default when no underlay interface is configured", func() {
 		// No fake underlay is set up here, so FindUnderlayMTU returns 0
 		// and SetVethMTUForTunnelOverhead must leave the veth MTU untouched.

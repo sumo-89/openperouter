@@ -58,6 +58,9 @@ type L2VNIParams struct {
 	Name         string
 	L2GatewayIPs []string
 	HostMaster   *HostMaster
+	// UnderlayMTU is the lowest MTU of the underlay interfaces, shared by every
+	// L2VNI of the node. Zero makes SetupL2VNI look it up itself.
+	UnderlayMTU int
 }
 
 type HostMaster struct {
@@ -165,9 +168,12 @@ func SetupL2VNI(ctx context.Context, params L2VNIParams) error {
 	}
 	slog.Info("SetupL2VNI: found host veth", "name", vethNames.HostSide, "index", hostVeth.Attrs().Index)
 
-	underlayMTU, err := FindUnderlayMTU(ns)
-	if err != nil {
-		return fmt.Errorf("could not find underlay MTU: %w", err)
+	underlayMTU := params.UnderlayMTU
+	if underlayMTU == 0 {
+		underlayMTU, err = FindUnderlayMTU(ns)
+		if err != nil {
+			return fmt.Errorf("could not find underlay MTU: %w", err)
+		}
 	}
 
 	if err := SetVethMTUForTunnelOverhead(hostVeth, underlayMTU, params.TunnelOverhead); err != nil {

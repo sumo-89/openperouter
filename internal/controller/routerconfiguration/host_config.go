@@ -116,6 +116,10 @@ func (k *KernelDatapathConfigurator) Configure(ctx context.Context, config inter
 		configuredL3VPNs = append(configuredL3VPNs, l3vpn)
 	}
 
+	if err := setUnderlayMTU(config.targetNamespace, hostConfig.L2VNIs); err != nil {
+		return err
+	}
+
 	var configuredL2VNIs []hostnetwork.L2VNIParams
 	for _, vni := range hostConfig.L2VNIs {
 		if failedL3Domains.Has(vni.VRF) {
@@ -275,4 +279,20 @@ func areAllUnderlayInterfacesToBeRemoved(
 		)
 	}
 	return allRemoved, nil
+}
+
+// setUnderlayMTU resolves the underlay MTU once for all the L2VNIs of a pass,
+// because the lookup lists every link of the router namespace.
+func setUnderlayMTU(targetNamespace string, l2vnis []hostnetwork.L2VNIParams) error {
+	if len(l2vnis) == 0 {
+		return nil
+	}
+	mtu, err := hostnetwork.FindUnderlayMTUAt(targetNamespace)
+	if err != nil {
+		return fmt.Errorf("could not find underlay MTU: %w", err)
+	}
+	for i := range l2vnis {
+		l2vnis[i].UnderlayMTU = mtu
+	}
+	return nil
 }
