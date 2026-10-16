@@ -24,14 +24,17 @@ import (
 	"regexp"
 	"time"
 
+	"golang.org/x/time/rate"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/selection"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/client-go/util/workqueue"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/controller"
 	"sigs.k8s.io/controller-runtime/pkg/event"
 	"sigs.k8s.io/controller-runtime/pkg/handler"
 	"sigs.k8s.io/controller-runtime/pkg/predicate"
@@ -472,6 +475,7 @@ func (r *PERouterReconciler) SetupWithManager(mgr ctrl.Manager) error {
 
 	builder := ctrl.NewControllerManagedBy(mgr).
 		Named("routercontroller").
+		WithOptions(controller.Options{RateLimiter: nodeRateLimiter()}).
 		Watches(&v1alpha1.Underlay{}, toMyNode).
 		Watches(&v1.Node{}, toMyNode).
 		Watches(&v1.Pod{}, toMyNode).
@@ -555,6 +559,21 @@ func nodeSelectorOf(obj client.Object) (*metav1.LabelSelector, bool) {
 		return o.Spec.NodeSelector, true
 	}
 	return nil, false
+}
+
+// maxNodeBackoff caps the requeue backoff of a failing pass. Every event of a
+// node shares one request, so this backoff is the node's whole retry cadence,
+// and controller-runtime's default cap of 1000 s would leave a node that failed
+// for a transient reason unconfigured long after the cause went away.
+const maxNodeBackoff = 30 * time.Second
+
+// nodeRateLimiter is controller-runtime's default limiter with the per-item
+// backoff capped at maxNodeBackoff.
+func nodeRateLimiter() workqueue.TypedRateLimiter[ctrl.Request] {
+	return workqueue.NewTypedMaxOfRateLimiter(
+		workqueue.NewTypedItemExponentialFailureRateLimiter[ctrl.Request](5*time.Millisecond, maxNodeBackoff),
+		&workqueue.TypedBucketRateLimiter[ctrl.Request]{Limiter: rate.NewLimiter(rate.Limit(10), 100)},
+	)
 }
 
 func setPodNodeNameIndex(mgr ctrl.Manager) error {
