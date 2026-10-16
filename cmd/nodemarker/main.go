@@ -17,6 +17,7 @@ limitations under the License.
 package main
 
 import (
+	"context"
 	"crypto/tls"
 	"flag"
 	"fmt"
@@ -212,6 +213,10 @@ func main() {
 		setupLog.Error(err, "unable to set up ready check")
 		os.Exit(1)
 	}
+	if err := mgr.AddReadyzCheck("webhook-cache", webhooks.CacheSynced); err != nil {
+		setupLog.Error(err, "unable to set up ready check")
+		os.Exit(1)
+	}
 
 	setupLog.Info("starting manager")
 
@@ -272,8 +277,11 @@ func setupWebhook(
 	logger.Info("webhooks enabled")
 
 	webhooks.Logger = logger
-	webhooks.WebhookClient = mgr.GetAPIReader()
 	webhooks.DatapathConfigValidator = configValidator
+	if err := webhooks.SetupCache(context.Background(), mgr); err != nil {
+		logger.Error("unable to set up the webhook cache", "error", err)
+		return err
+	}
 
 	if err := webhooks.SetupL3VNI(mgr); err != nil {
 		logger.Error("unable to create the webhook", "error", err, "webhook", "L3VNIs")

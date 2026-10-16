@@ -12,7 +12,6 @@ import (
 	"github.com/openperouter/openperouter/api/v1alpha1"
 	"github.com/openperouter/openperouter/internal/conversion"
 	v1 "k8s.io/api/admission/v1"
-	corev1 "k8s.io/api/core/v1"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/webhook"
@@ -133,12 +132,12 @@ func validateL3VPN(ctx context.Context, l3vpn *v1alpha1.L3VPN) error {
 		return err
 	}
 
-	nodeList := &corev1.NodeList{}
-	if err := WebhookClient.List(ctx, nodeList, &client.ListOptions{}); err != nil {
+	nodes, err := listNodes(ctx)
+	if err != nil {
 		return fmt.Errorf("failed to get existing Node objects when validating Underlay: %w", err)
 	}
 
-	if err := conversion.ValidateSRv6ForNodes(nodeList.Items, underlayList.Items, toValidate); err != nil {
+	if err := conversion.ValidateSRv6ForNodes(nodes, underlayList.Items, toValidate); err != nil {
 		return fmt.Errorf("validation failed: %w", err)
 	}
 
@@ -149,7 +148,7 @@ func validateL3VPN(ctx context.Context, l3vpn *v1alpha1.L3VPN) error {
 
 	if err := conversion.ValidateOverlayResourcesForNodes(
 		ctx,
-		nodeList.Items,
+		nodes,
 		l2vniList.Items,
 		l3vniList.Items,
 		toValidate,

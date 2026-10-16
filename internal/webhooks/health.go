@@ -20,15 +20,23 @@ func SetupHealth(mgr ctrl.Manager) {
 
 	mgr.GetWebhookServer().Register(
 		readyPath,
-		&healthHandler{})
+		&healthHandler{check: CacheSynced})
 }
 
-type healthHandler struct{}
+type healthHandler struct {
+	check func(*http.Request) error
+}
 
 func (h *healthHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
+	}
+	if h.check != nil {
+		if err := h.check(r); err != nil {
+			http.Error(w, err.Error(), http.StatusServiceUnavailable)
+			return
+		}
 	}
 
 	w.Header().Set("Content-Type", "application/json")

@@ -12,7 +12,6 @@ import (
 	"github.com/openperouter/openperouter/api/v1alpha1"
 	"github.com/openperouter/openperouter/internal/conversion"
 	v1 "k8s.io/api/admission/v1"
-	corev1 "k8s.io/api/core/v1"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/webhook"
@@ -128,8 +127,8 @@ func validateL2VNI(ctx context.Context, l2vni *v1alpha1.L2VNI) error {
 		toValidate = append(toValidate, *l2vni.DeepCopy())
 	}
 
-	nodeList := &corev1.NodeList{}
-	if err := WebhookClient.List(ctx, nodeList, &client.ListOptions{}); err != nil {
+	nodes, err := listNodes(ctx)
+	if err != nil {
 		return fmt.Errorf("failed to get existing Node objects when validating L2VNI: %w", err)
 	}
 
@@ -143,7 +142,7 @@ func validateL2VNI(ctx context.Context, l2vni *v1alpha1.L2VNI) error {
 		return err
 	}
 
-	if err := conversion.ValidateOverlayResourcesForNodes(ctx, nodeList.Items, toValidate,
+	if err := conversion.ValidateOverlayResourcesForNodes(ctx, nodes, toValidate,
 		toValidateL3.Items, l3vpnList.Items); err != nil {
 		return fmt.Errorf("validation failed: %w", err)
 	}

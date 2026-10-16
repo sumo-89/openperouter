@@ -10,7 +10,6 @@ import (
 	"reflect"
 
 	v1 "k8s.io/api/admission/v1"
-	corev1 "k8s.io/api/core/v1"
 	"k8s.io/utils/ptr"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -133,12 +132,12 @@ func validateUnderlay(ctx context.Context, underlay *v1alpha1.Underlay) error {
 		toValidate = append(toValidate, *underlay.DeepCopy())
 	}
 
-	nodeList := &corev1.NodeList{}
-	if err := WebhookClient.List(ctx, nodeList, &client.ListOptions{}); err != nil {
+	nodes, err := listNodes(ctx)
+	if err != nil {
 		return fmt.Errorf("failed to get existing Node objects when validating Underlay: %w", err)
 	}
 
-	if err := conversion.ValidateUnderlaysForNodes(nodeList.Items, toValidate); err != nil {
+	if err := conversion.ValidateUnderlaysForNodes(nodes, toValidate); err != nil {
 		return fmt.Errorf("validation failed: %w", err)
 	}
 
