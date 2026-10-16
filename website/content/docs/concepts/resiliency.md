@@ -57,7 +57,7 @@ When [Graceful Restart is enabled]({{< ref "/docs/configuration/graceful-restart
 
 When FRR restarts, the new process sends a BGP OPEN with the Graceful Restart capability. Peers recognize this as a restart event and continue using their existing routes until the session reconverges. Traffic keeps flowing throughout.
 
-Additionally, zebra starts with the `-K 60` flag, which tells it to retain kernel nexthop objects and routes for 60 seconds after startup rather than flushing them. The init container copies the persistent `frr.conf` so FRR starts with its full configuration — including BGP neighbors — and can reconnect immediately.
+Additionally, zebra starts with `-K60`, which tells it to retain kernel nexthop objects and routes for 60 seconds after startup rather than flushing them, and on the kernel datapath with `-r`, which keeps it from removing its routes from the kernel when it stops. The init container copies the persistent `frr.conf` so FRR starts with its full configuration — including BGP neighbors — and can reconnect immediately.
 
 BGP peers must also support Graceful Restart. This is widely supported across routing platforms including FRR, Cisco IOS-XE/NX-OS, Arista EOS, Juniper Junos, Nokia SR OS, and BIRD.
 

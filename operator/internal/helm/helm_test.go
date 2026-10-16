@@ -573,6 +573,52 @@ func TestParseChartWithBGPListenLimit(t *testing.T) {
 	g.Expect(controllerFound).To(BeTrue())
 }
 
+func TestParseChartZebraOptions(t *testing.T) {
+	tests := []struct {
+		name        string
+		datapath    string
+		wantOptions string
+	}{
+		{
+			name:        "kernel datapath",
+			datapath:    "kernel",
+			wantOptions: `zebra_options="  -A 127.0.0.1 -s 90000000 --limit-fds 100000 -K60 -r"`,
+		},
+		{
+			name:        "grout datapath",
+			datapath:    groutDatapath,
+			wantOptions: `zebra_options="  -A 127.0.0.1 -s 90000000 --limit-fds 100000 -K60 -M dplane_grout"`,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			g := NewGomegaWithT(t)
+			chart, err := NewChart(testChartPath, openperouterChartName, openperouterTestNamespace)
+			g.Expect(err).ToNot(HaveOccurred())
+			openperouter := &operatorapi.OpenPERouter{
+				ObjectMeta: metav1.ObjectMeta{Name: "openperouter", Namespace: openperouterTestNamespace},
+				Spec:       operatorapi.OpenPERouterSpec{Datapath: new(tt.datapath)},
+			}
+
+			objs, err := chart.Objects(defaultEnvConfig, openperouter)
+			g.Expect(err).ToNot(HaveOccurred())
+
+			var daemons []string
+			for _, obj := range objs {
+				if obj.GetKind() != "ConfigMap" || obj.GetName() != "frr-startup" {
+					continue
+				}
+				cm := v1.ConfigMap{}
+				g.Expect(runtime.DefaultUnstructuredConverter.FromUnstructured(obj.UnstructuredContent(), &cm)).To(Succeed())
+				for line := range strings.Lines(cm.Data["daemons"]) {
+					daemons = append(daemons, strings.TrimSpace(line))
+				}
+			}
+			g.Expect(daemons).To(ContainElement(tt.wantOptions))
+		})
+	}
+}
+
 func validateLogLevel(level string, pod v1.PodTemplateSpec) error {
 	foundOne := false
 	for _, c := range pod.Spec.Containers {

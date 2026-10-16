@@ -75,7 +75,7 @@ spec:
 When the controller detects the `gracefulRestart` field on the Underlay, it configures FRR and the router pod for resilient restarts:
 
 1. **FRR configuration**: The generated `frr.conf` includes `bgp graceful-restart`, `bgp graceful-restart preserve-fw-state`, and the configured `restart-time`, `stalepath-time` and `select-defer-time` values in the default BGP instance. Values equal to FRR's defaults are not rendered.
-2. **Zebra kernel retention**: Zebra starts with the `-K 60` flag, which tells it to retain existing kernel nexthop objects, routes, and FDB entries for 60 seconds after startup instead of flushing them.
+2. **Zebra kernel retention**: Zebra starts with `-K60`, which tells it to retain existing kernel nexthop objects, routes, and FDB entries for 60 seconds after startup instead of flushing them, and on the kernel datapath with `-r`, which leaves the routes it installed in the kernel when it stops. Routes that bgpd has not reinstalled within those 60 seconds are removed, so keep `selectDeferTimeSeconds` below 60 when a peer may not send End-of-RIB.
 3. **Persistent configuration**: The init container copies the persistent `frr.conf` (written by the controller on every config push) into FRR's startup directory. This means FRR starts with its full BGP configuration — including neighbor definitions and Graceful Restart settings — rather than a blank default.
 4. **Fast reconnection**: The controller automatically sets `timers connect 5` on all underlay neighbors, reducing the BGP connect-retry interval to 5 seconds so the new FRR process reconnects quickly after the old session drops.
 

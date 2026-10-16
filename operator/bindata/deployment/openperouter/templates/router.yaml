@@ -45,10 +45,13 @@ data:
     # Check /etc/pam.d/frr if you intend to use "vtysh"!
     #
     vtysh_enable=yes
+    {{- /* -K takes an optional argument, so its value must be attached: "-K 60"
+           leaves zebra at its default. -r is kernel-only because the -K sweep that
+           bounds the retained routes is not known to reach routes left in grout. */}}
     {{- if eq .Values.openperouter.datapath "grout" }}
-    zebra_options="  -A 127.0.0.1 -s 90000000 --limit-fds 100000 -K 60 -M dplane_grout"
+    zebra_options="  -A 127.0.0.1 -s 90000000 --limit-fds 100000 -K60 -M dplane_grout"
     {{- else }}
-    zebra_options="  -A 127.0.0.1 -s 90000000 --limit-fds 100000 -K 60"
+    zebra_options="  -A 127.0.0.1 -s 90000000 --limit-fds 100000 -K60 -r"
     {{- end }}
     bgpd_options="   -A 127.0.0.1 --limit-fds 100000"
     ospfd_options="  -A 127.0.0.1"
