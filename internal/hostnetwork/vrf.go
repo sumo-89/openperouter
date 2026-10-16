@@ -58,6 +58,17 @@ func setupVRF(name string, opts ...string) error {
 }
 
 func createVRF(name string) (*netlink.Vrf, error) {
+	link, err := netlink.LinkByName(name)
+	if err != nil && !errors.As(err, &netlink.LinkNotFoundError{}) {
+		return nil, fmt.Errorf("could not get link by name %s: %v", name, err)
+	}
+
+	if vrf, ok := link.(*netlink.Vrf); ok {
+		return vrf, nil
+	}
+
+	// Searched only when a VRF is created, because the search lists every link
+	// of the namespace and every pass sets up every VRF.
 	tableID, err := findFreeRoutingTableID()
 	if err != nil {
 		return nil, err
@@ -68,29 +79,11 @@ func createVRF(name string) (*netlink.Vrf, error) {
 		Table:     tableID,
 	}
 
-	link, err := netlink.LinkByName(name)
-
-	// does not exist. Let's create.
-	if errors.As(err, &netlink.LinkNotFoundError{}) {
-		if err := netlink.LinkAdd(toCreate); err != nil {
-			return nil, fmt.Errorf("could not add VRF %s: %v", name, err)
-		}
-		return toCreate, nil
-	}
-	if err != nil {
-		return nil, fmt.Errorf("could not get link by name %s: %v", name, err)
-	}
-
-	// exists
-	vrf, ok := link.(*netlink.Vrf)
-	if ok {
-		return vrf, nil
-	}
-
 	// exists but not of the right type, let's remove and recreate.
-	err = netlink.LinkDel(link)
-	if err != nil {
-		return nil, fmt.Errorf("failed to delete link %v: %w", link, err)
+	if link != nil {
+		if err := netlink.LinkDel(link); err != nil {
+			return nil, fmt.Errorf("failed to delete link %v: %w", link, err)
+		}
 	}
 	if err := netlink.LinkAdd(toCreate); err != nil {
 		return nil, fmt.Errorf("could not add VRF %s: %v", name, err)
@@ -99,7 +92,7 @@ func createVRF(name string) (*netlink.Vrf, error) {
 }
 
 func findFreeRoutingTableID() (uint32, error) {
-	links, err := netlink.LinkList()
+	links, err := linkList()
 	if err != nil {
 		return 0, fmt.Errorf("findFreeRoutingTableID: Failed to find links %v", err)
 	}
