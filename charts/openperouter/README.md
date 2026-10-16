@@ -31,14 +31,14 @@ Kubernetes: `>= 1.19.0-0`
 | openperouter.controller.cniCacheDir | string | `"/var/lib/openperouter/cni/cache"` | CNI cache directory for persistent CNI state across pod restarts |
 | openperouter.controller.cniPluginDirs | list | `["/opt/openperouter/cni/bin/"]` | CNI plugin binary directories. The default matches the path baked into the controller image. Override only to use externally-provided binaries (e.g. host-mounted). |
 | openperouter.controller.healthProbePort | int | `9081` | Health probe port for liveness and readiness checks |
-| openperouter.controller.resources | object | `{}` |  |
+| openperouter.controller.resources | object | `{"requests":{"cpu":"250m","memory":"256Mi"}}` | Resources of the controller container. Without a CPU request the pod is BestEffort and a reconciliation gets almost no CPU on a busy node. |
 | openperouter.datapath | string | `"kernel"` | Datapath to use for L3 forwarding. "kernel" uses the standard Linux kernel datapath; "grout" adds a DPDK-accelerated sidecar that runs alongside FRR (FRR's dplane_grout module syncs routes automatically). |
 | openperouter.frr.image.pullPolicy | string | `""` |  |
 | openperouter.frr.image.repository | string | `"quay.io/openperouter/openperouter"` |  |
 | openperouter.frr.image.tag | string | `""` |  |
-| openperouter.frr.reloader.resources | object | `{}` |  |
+| openperouter.frr.reloader.resources | object | `{"requests":{"cpu":"100m","memory":"128Mi"}}` | Resources of the reloader container, which applies every configuration change. No memory limit by default: a kill during a reload leaves FRR partially configured until the next reconciliation. |
 | openperouter.frr.reloader.vtyshTimeout | string | `""` | Timeout for vtysh commands used in health checks. Increase under heavy VNI load. Defaults to 10s. |
-| openperouter.frr.resources | object | `{}` |  |
+| openperouter.frr.resources | object | `{"requests":{"cpu":"250m","memory":"256Mi"}}` | Resources of the frr container. A CPU request keeps BGP and BFD timely on a busy node. No memory limit by default: an OOM kill restarts FRR. |
 | openperouter.grout.image.pullPolicy | string | `""` |  |
 | openperouter.grout.image.repository | string | `"quay.io/openperouter/router"` |  |
 | openperouter.grout.image.tag | string | `"main-grout"` |  |
@@ -54,11 +54,11 @@ Kubernetes: `>= 1.19.0-0`
 | openperouter.labels | object | `{}` |  |
 | openperouter.logLevel | string | `"info"` | Controller log level. Must be one of: `debug`, `info`, `warn` or `error`. |
 | openperouter.nodeSelector | object | `{}` | Node selector to constrain all openperouter pods (router, controller, nodemarker, hostbridge) to nodes with matching labels. |
-| openperouter.nodemarker.resources | object | `{}` |  |
+| openperouter.nodemarker.resources | object | `{"requests":{"cpu":"100m","memory":"128Mi"}}` | Resources of the nodemarker container. It serves every admission call for the openperouter resources, so a CPU request keeps the webhooks responsive on a busy node. |
 | openperouter.ovsRunDir | string | `"/var/run/openvswitch"` | OVS run directory to mount. This is the directory containing the OVS socket. |
 | openperouter.ovsSocketPath | string | `""` | OVS database socket path. Defaults to standard OVS location if not specified. |
 | openperouter.podAnnotations | object | `{}` |  |
-| openperouter.priorityClassName | string | `""` |  |
+| openperouter.priorityClassName | string | `""` | Priority class for all openperouter pods (router, controller, nodemarker, hostbridge). The router carries the node's traffic and the nodemarker serves the validating webhooks, so use system-node-critical (or system-cluster-critical): the kubelet and the descheduler do not evict pods of these classes for node pressure. A user-defined PriorityClass only orders scheduling preemption. Some clusters admit the system classes only in namespaces with a matching ResourceQuota. |
 | openperouter.runtimeClassName | string | `""` |  |
 | openperouter.serviceAccounts.annotations | object | `{}` |  |
 | openperouter.serviceAccounts.controller.name | string | `""` |  |

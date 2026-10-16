@@ -54,6 +54,13 @@ openperouter:
     - key: node-role.kubernetes.io/control-plane
       operator: Exists
       effect: NoSchedule
+  # -- Priority class for all openperouter pods (router, controller,
+  # nodemarker, hostbridge). The router carries the node's traffic and the
+  # nodemarker serves the validating webhooks, so use system-node-critical
+  # (or system-cluster-critical): the kubelet and the descheduler do not evict
+  # pods of these classes for node pressure. A user-defined PriorityClass only
+  # orders scheduling preemption. Some clusters admit the system classes only in
+  # namespaces with a matching ResourceQuota.
   priorityClassName: ""
   # -- Affinity rules for all openperouter pods (router, controller,
   # nodemarker, hostbridge).
@@ -63,7 +70,12 @@ openperouter:
   podAnnotations: {}
   labels: {}
   controller:
-    resources: {}
+    # -- Resources of the controller container. Without a CPU request the pod is
+    # BestEffort and a reconciliation gets almost no CPU on a busy node.
+    resources:
+      requests:
+        cpu: 250m
+        memory: 256Mi
     # -- Health probe port for liveness and readiness checks
     healthProbePort: 9081
     # -- CNI plugin binary directories. The default matches the path baked into
@@ -74,16 +86,33 @@ openperouter:
     # -- CNI cache directory for persistent CNI state across pod restarts
     cniCacheDir: "/var/lib/openperouter/cni/cache"
   nodemarker:
-    resources: {}
+    # -- Resources of the nodemarker container. It serves every admission call for
+    # the openperouter resources, so a CPU request keeps the webhooks responsive
+    # on a busy node.
+    resources:
+      requests:
+        cpu: 100m
+        memory: 128Mi
   # frr contains configuration specific to the perouter FRR container,
   frr:
     image:
       repository: quay.io/openperouter/openperouter
       tag: ""
       pullPolicy: ""
-    resources: {}
+    # -- Resources of the frr container. A CPU request keeps BGP and BFD timely on
+    # a busy node. No memory limit by default: an OOM kill restarts FRR.
+    resources:
+      requests:
+        cpu: 250m
+        memory: 256Mi
     reloader:
-      resources: {}
+      # -- Resources of the reloader container, which applies every configuration
+      # change. No memory limit by default: a kill during a reload leaves FRR
+      # partially configured until the next reconciliation.
+      resources:
+        requests:
+          cpu: 100m
+          memory: 128Mi
       # -- Timeout for vtysh commands used in health checks. Increase under heavy VNI load. Defaults to 10s.
       vtyshTimeout: ""
   # -- Datapath to use for L3 forwarding. "kernel" uses the standard Linux
