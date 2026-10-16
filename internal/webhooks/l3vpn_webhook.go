@@ -12,6 +12,7 @@ import (
 	"github.com/openperouter/openperouter/api/v1alpha1"
 	"github.com/openperouter/openperouter/internal/conversion"
 	v1 "k8s.io/api/admission/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/webhook"
@@ -83,7 +84,7 @@ func validateL3VPNCreate(ctx context.Context, l3vpn *v1alpha1.L3VPN) error {
 	Logger.Debug("webhook l3vpn", "action", "create", "name", l3vpn.Name, "namespace", l3vpn.Namespace)
 	defer Logger.Debug("webhook l3vpn", "action", "end create", "name", l3vpn.Name, "namespace", l3vpn.Namespace)
 
-	return validateL3VPN(ctx, l3vpn)
+	return validateL3VPN(ctx, l3vpn, l3vpn.Spec.NodeSelector)
 }
 
 func validateL3VPNUpdate(ctx context.Context, l3vpn *v1alpha1.L3VPN, oldL3VPN *v1alpha1.L3VPN) error {
@@ -94,7 +95,7 @@ func validateL3VPNUpdate(ctx context.Context, l3vpn *v1alpha1.L3VPN, oldL3VPN *v
 		return errors.New("localCIDRs cannot be changed")
 	}
 
-	return validateL3VPN(ctx, l3vpn)
+	return validateL3VPN(ctx, l3vpn, l3vpn.Spec.NodeSelector, oldL3VPN.Spec.NodeSelector)
 }
 
 func validateL3VPNDelete(_ *v1alpha1.L3VPN) error {
@@ -102,7 +103,7 @@ func validateL3VPNDelete(_ *v1alpha1.L3VPN) error {
 }
 
 // validateL3VPN contains validation logic that is common to the Create and Update operations.
-func validateL3VPN(ctx context.Context, l3vpn *v1alpha1.L3VPN) error {
+func validateL3VPN(ctx context.Context, l3vpn *v1alpha1.L3VPN, nodeSelectors ...*metav1.LabelSelector) error {
 	existingL3VPNs, err := getL3VPNs(ctx)
 	if err != nil {
 		return err
@@ -132,7 +133,7 @@ func validateL3VPN(ctx context.Context, l3vpn *v1alpha1.L3VPN) error {
 		return err
 	}
 
-	nodes, err := listNodes(ctx)
+	nodes, err := affectedNodes(ctx, nodeSelectors...)
 	if err != nil {
 		return fmt.Errorf("failed to get existing Node objects when validating Underlay: %w", err)
 	}

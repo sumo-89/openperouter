@@ -200,7 +200,7 @@ func TestValidateUnderlay(t *testing.T) {
 			WebhookClient = client
 			Logger, _ = logging.New("debug")
 
-			err = validateUnderlay(t.Context(), tc.newUnderlay)
+			err = validateUnderlay(t.Context(), tc.newUnderlay, tc.newUnderlay.Spec.NodeSelector)
 			if tc.errorString == "" {
 				if err != nil {
 					t.Fatalf("expected no error, but got %q", err)

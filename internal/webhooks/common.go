@@ -8,11 +8,14 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"slices"
 	"sync/atomic"
 
 	"github.com/openperouter/openperouter/api/v1alpha1"
 	"github.com/openperouter/openperouter/internal/conversion"
 	v1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/runtime"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -88,6 +91,37 @@ func objectsFromResources[T client.Object](objs []T) []client.Object {
 		output = append(output, obj)
 	}
 	return output
+}
+
+// affectedNodes returns the nodes whose configuration a write can change:
+// those the written object's nodeSelector selects and, for an update, those
+// its old one selected. The other nodes see the same objects before and after
+// the write, so validating them can only find failures the write did not
+// cause. A nil selector selects every node.
+func affectedNodes(ctx context.Context, nodeSelectors ...*metav1.LabelSelector) ([]v1.Node, error) {
+	nodes, err := listNodes(ctx)
+	if err != nil {
+		return nil, err
+	}
+	selectors := make([]labels.Selector, 0, len(nodeSelectors))
+	for _, nodeSelector := range nodeSelectors {
+		if nodeSelector == nil {
+			return nodes, nil
+		}
+		selector, err := metav1.LabelSelectorAsSelector(nodeSelector)
+		if err != nil {
+			// Validating every node reports the invalid selector.
+			return nodes, nil
+		}
+		selectors = append(selectors, selector)
+	}
+	var affected []v1.Node
+	for _, node := range nodes {
+		if slices.ContainsFunc(selectors, func(s labels.Selector) bool { return s.Matches(labels.Set(node.Labels)) }) {
+			affected = append(affected, node)
+		}
+	}
+	return affected, nil
 }
 
 // listNodes reads the Nodes without copying them: the validations only read

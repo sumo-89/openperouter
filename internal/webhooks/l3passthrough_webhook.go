@@ -10,6 +10,7 @@ import (
 	"github.com/openperouter/openperouter/api/v1alpha1"
 	"github.com/openperouter/openperouter/internal/conversion"
 	v1 "k8s.io/api/admission/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/webhook"
@@ -88,21 +89,23 @@ func validateL3PassthroughCreate(ctx context.Context, l3passthrough *v1alpha1.L3
 	Logger.Debug("webhook l3passthrough", "action", "create", "name", l3passthrough.Name, "namespace", l3passthrough.Namespace)
 	defer Logger.Debug("webhook l3passthrough", "action", "end create", "name", l3passthrough.Name, "namespace", l3passthrough.Namespace)
 
-	return validateL3Passthrough(ctx, l3passthrough)
+	return validateL3Passthrough(ctx, l3passthrough, l3passthrough.Spec.NodeSelector)
 }
 
-func validateL3PassthroughUpdate(ctx context.Context, l3passthrough *v1alpha1.L3Passthrough, _ *v1alpha1.L3Passthrough) error {
+func validateL3PassthroughUpdate(ctx context.Context, l3passthrough, oldL3Passthrough *v1alpha1.L3Passthrough) error {
 	Logger.Debug("webhook l3passthrough", "action", "update", "name", l3passthrough.Name, "namespace", l3passthrough.Namespace)
 	defer Logger.Debug("webhook l3passthrough", "action", "end update", "name", l3passthrough.Name, "namespace", l3passthrough.Namespace)
 
-	return validateL3Passthrough(ctx, l3passthrough)
+	return validateL3Passthrough(ctx, l3passthrough,
+		l3passthrough.Spec.NodeSelector, oldL3Passthrough.Spec.NodeSelector)
 }
 
 func validateL3PassthroughDelete(_ *v1alpha1.L3Passthrough) error {
 	return nil
 }
 
-func validateL3Passthrough(ctx context.Context, l3passthrough *v1alpha1.L3Passthrough) error {
+func validateL3Passthrough(ctx context.Context, l3passthrough *v1alpha1.L3Passthrough,
+	nodeSelectors ...*metav1.LabelSelector) error {
 	existingL3Passthroughs, err := getL3Passthroughs(ctx)
 	if err != nil {
 		return err
@@ -121,7 +124,7 @@ func validateL3Passthrough(ctx context.Context, l3passthrough *v1alpha1.L3Passth
 	if !found {
 		toValidate = append(toValidate, *l3passthrough.DeepCopy())
 	}
-	nodes, err := listNodes(ctx)
+	nodes, err := affectedNodes(ctx, nodeSelectors...)
 	if err != nil {
 		return fmt.Errorf("failed to get existing Node objects when validating L3Passthrough: %w", err)
 	}

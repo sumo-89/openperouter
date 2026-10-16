@@ -12,6 +12,7 @@ import (
 	"github.com/openperouter/openperouter/api/v1alpha1"
 	"github.com/openperouter/openperouter/internal/conversion"
 	v1 "k8s.io/api/admission/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/webhook"
@@ -89,7 +90,7 @@ func validateL2VNICreate(ctx context.Context, l2vni *v1alpha1.L2VNI) error {
 	Logger.Debug("webhook l2vni", "action", "create", "name", l2vni.Name, "namespace", l2vni.Namespace)
 	defer Logger.Debug("webhook l2vni", "action", "end create", "name", l2vni.Name, "namespace", l2vni.Namespace)
 
-	return validateL2VNI(ctx, l2vni)
+	return validateL2VNI(ctx, l2vni, l2vni.Spec.NodeSelector)
 }
 
 func validateL2VNIUpdate(ctx context.Context, oldL2VNI, l2vni *v1alpha1.L2VNI) error {
@@ -100,14 +101,14 @@ func validateL2VNIUpdate(ctx context.Context, oldL2VNI, l2vni *v1alpha1.L2VNI) e
 		return errors.New("GatewayIPs cannot be changed")
 	}
 
-	return validateL2VNI(ctx, l2vni)
+	return validateL2VNI(ctx, l2vni, l2vni.Spec.NodeSelector, oldL2VNI.Spec.NodeSelector)
 }
 
 func validateL2VNIDelete(_ *v1alpha1.L2VNI) error {
 	return nil
 }
 
-func validateL2VNI(ctx context.Context, l2vni *v1alpha1.L2VNI) error {
+func validateL2VNI(ctx context.Context, l2vni *v1alpha1.L2VNI, nodeSelectors ...*metav1.LabelSelector) error {
 	existingL2VNIs, err := getL2VNIs(ctx)
 	if err != nil {
 		return err
@@ -127,7 +128,7 @@ func validateL2VNI(ctx context.Context, l2vni *v1alpha1.L2VNI) error {
 		toValidate = append(toValidate, *l2vni.DeepCopy())
 	}
 
-	nodes, err := listNodes(ctx)
+	nodes, err := affectedNodes(ctx, nodeSelectors...)
 	if err != nil {
 		return fmt.Errorf("failed to get existing Node objects when validating L2VNI: %w", err)
 	}

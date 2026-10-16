@@ -10,6 +10,7 @@ import (
 	"reflect"
 
 	v1 "k8s.io/api/admission/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/utils/ptr"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -93,7 +94,7 @@ func validateUnderlayCreate(ctx context.Context, underlay *v1alpha1.Underlay) er
 	Logger.Debug("webhook underlay", "action", "create", "name", underlay.Name, "namespace", underlay.Namespace)
 	defer Logger.Debug("webhook underlay", "action", "end create", "name", underlay.Name, "namespace", underlay.Namespace)
 
-	return validateUnderlay(ctx, underlay)
+	return validateUnderlay(ctx, underlay, underlay.Spec.NodeSelector)
 }
 
 func validateUnderlayUpdate(ctx context.Context, oldUnderlay *v1alpha1.Underlay, newUnderlay *v1alpha1.Underlay) error {
@@ -106,14 +107,14 @@ func validateUnderlayUpdate(ctx context.Context, oldUnderlay *v1alpha1.Underlay,
 	if err := validateCNIDeviceImmutable(oldUnderlay, newUnderlay); err != nil {
 		return err
 	}
-	return validateUnderlay(ctx, newUnderlay)
+	return validateUnderlay(ctx, newUnderlay, newUnderlay.Spec.NodeSelector, oldUnderlay.Spec.NodeSelector)
 }
 
 func validateUnderlayDelete(deletedUnderlay *v1alpha1.Underlay) error {
 	return nil
 }
 
-func validateUnderlay(ctx context.Context, underlay *v1alpha1.Underlay) error {
+func validateUnderlay(ctx context.Context, underlay *v1alpha1.Underlay, nodeSelectors ...*metav1.LabelSelector) error {
 	existingUnderlays, err := getUnderlays(ctx)
 	if err != nil {
 		return err
@@ -132,7 +133,7 @@ func validateUnderlay(ctx context.Context, underlay *v1alpha1.Underlay) error {
 		toValidate = append(toValidate, *underlay.DeepCopy())
 	}
 
-	nodes, err := listNodes(ctx)
+	nodes, err := affectedNodes(ctx, nodeSelectors...)
 	if err != nil {
 		return fmt.Errorf("failed to get existing Node objects when validating Underlay: %w", err)
 	}

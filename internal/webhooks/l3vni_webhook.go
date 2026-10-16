@@ -12,6 +12,7 @@ import (
 	"github.com/openperouter/openperouter/api/v1alpha1"
 	"github.com/openperouter/openperouter/internal/conversion"
 	v1 "k8s.io/api/admission/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/webhook"
@@ -89,7 +90,7 @@ func validateL3VNICreate(ctx context.Context, l3vni *v1alpha1.L3VNI) error {
 	Logger.Debug("webhook l3vni", "action", "create", "name", l3vni.Name, "namespace", l3vni.Namespace)
 	defer Logger.Debug("webhook l3vni", "action", "end create", "name", l3vni.Name, "namespace", l3vni.Namespace)
 
-	return validateL3VNI(ctx, l3vni)
+	return validateL3VNI(ctx, l3vni, l3vni.Spec.NodeSelector)
 }
 
 func validateL3VNIUpdate(ctx context.Context, l3vni *v1alpha1.L3VNI, oldL3VNI *v1alpha1.L3VNI) error {
@@ -100,7 +101,7 @@ func validateL3VNIUpdate(ctx context.Context, l3vni *v1alpha1.L3VNI, oldL3VNI *v
 		return errors.New("localCIDRs cannot be changed")
 	}
 
-	return validateL3VNI(ctx, l3vni)
+	return validateL3VNI(ctx, l3vni, l3vni.Spec.NodeSelector, oldL3VNI.Spec.NodeSelector)
 }
 
 func localCIDR(hostSession *v1alpha1.HostSession) []string {
@@ -114,7 +115,7 @@ func validateL3VNIDelete(_ *v1alpha1.L3VNI) error {
 	return nil
 }
 
-func validateL3VNI(ctx context.Context, l3vni *v1alpha1.L3VNI) error {
+func validateL3VNI(ctx context.Context, l3vni *v1alpha1.L3VNI, nodeSelectors ...*metav1.LabelSelector) error {
 	existingL3VNIs, err := getL3VNIs(ctx)
 	if err != nil {
 		return err
@@ -134,7 +135,7 @@ func validateL3VNI(ctx context.Context, l3vni *v1alpha1.L3VNI) error {
 		toValidate = append(toValidate, *l3vni.DeepCopy())
 	}
 
-	nodes, err := listNodes(ctx)
+	nodes, err := affectedNodes(ctx, nodeSelectors...)
 	if err != nil {
 		return fmt.Errorf("failed to get existing Node objects when validating L3VNI: %w", err)
 	}
