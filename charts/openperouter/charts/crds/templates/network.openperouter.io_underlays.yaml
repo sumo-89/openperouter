@@ -76,6 +76,20 @@ spec:
                     maximum: 4095
                     minimum: 1
                     type: integer
+                  selectDeferTimeSeconds:
+                    default: 240
+                    description: |-
+                      selectDeferTimeSeconds bounds how long, after a restart, the router
+                      defers bestpath selection while it waits for End-of-RIB from its peers.
+                      Routes are installed only once every peer has sent End-of-RIB or this
+                      timer expires. Keep it below the time the dataplane retains the routes
+                      of the previous run (for zebra, the kernel graceful restart time set
+                      with -K), otherwise those routes are swept before the restarted router
+                      installs them again.
+                    format: int64
+                    maximum: 3600
+                    minimum: 0
+                    type: integer
                   stalePathTimeSeconds:
                     default: 360
                     description: |-

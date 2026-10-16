@@ -63,6 +63,16 @@ func TestApplyDefaults(t *testing.T) {
 			expected: "10.0.0.0/24",
 		},
 		{
+			name: "Underlay gracefulRestart selectDeferTimeSeconds default",
+			gvk:  underlayGVK,
+			obj: newUnstructured("Underlay", map[string]any{
+				"asn":             int64(65000),
+				"gracefulRestart": map[string]any{},
+			}),
+			field:    "spec.gracefulRestart.selectDeferTimeSeconds",
+			expected: int64(240),
+		},
+		{
 			name:     "L2VNI vxlanport default",
 			gvk:      l2vniGVK,
 			obj:      newUnstructured("L2VNI", map[string]any{}),
@@ -455,6 +465,40 @@ func TestValidateSuccessful(t *testing.T) {
 			}),
 		},
 		{
+			name: "Underlay gracefulRestart selectDeferTimeSeconds minimum (0)",
+			gvk:  underlayGVK,
+			obj: newUnstructured("Underlay", map[string]any{
+				"asn": int64(65000),
+				"interfaces": []any{
+					map[string]any{
+						"type":          "NetworkDevice",
+						"networkDevice": map[string]any{"interfaceName": "eth0"},
+					},
+				},
+				"neighbors": []any{
+					map[string]any{"address": "192.168.1.1", "asn": int64(65001)},
+				},
+				"gracefulRestart": map[string]any{"selectDeferTimeSeconds": int64(0)},
+			}),
+		},
+		{
+			name: "Underlay gracefulRestart selectDeferTimeSeconds maximum (3600)",
+			gvk:  underlayGVK,
+			obj: newUnstructured("Underlay", map[string]any{
+				"asn": int64(65000),
+				"interfaces": []any{
+					map[string]any{
+						"type":          "NetworkDevice",
+						"networkDevice": map[string]any{"interfaceName": "eth0"},
+					},
+				},
+				"neighbors": []any{
+					map[string]any{"address": "192.168.1.1", "asn": int64(65001)},
+				},
+				"gracefulRestart": map[string]any{"selectDeferTimeSeconds": int64(3600)},
+			}),
+		},
+		{
 			name: "valid RawFRRConfig",
 			gvk:  rawFRRConfigGVK,
 			obj: newUnstructured("RawFRRConfig", map[string]any{
@@ -759,6 +803,42 @@ func TestValidateFailure(t *testing.T) {
 				},
 			}),
 			errSubstr: "should be less than or equal to 65535",
+		},
+		{
+			name: "Underlay gracefulRestart selectDeferTimeSeconds below minimum (-1)",
+			gvk:  underlayGVK,
+			obj: newUnstructured("Underlay", map[string]any{
+				"asn": int64(65000),
+				"interfaces": []any{
+					map[string]any{
+						"type":          "NetworkDevice",
+						"networkDevice": map[string]any{"interfaceName": "eth0"},
+					},
+				},
+				"neighbors": []any{
+					map[string]any{"address": "192.168.1.1", "asn": int64(65001)},
+				},
+				"gracefulRestart": map[string]any{"selectDeferTimeSeconds": int64(-1)},
+			}),
+			errSubstr: "should be greater than or equal to 0",
+		},
+		{
+			name: "Underlay gracefulRestart selectDeferTimeSeconds above maximum (3601)",
+			gvk:  underlayGVK,
+			obj: newUnstructured("Underlay", map[string]any{
+				"asn": int64(65000),
+				"interfaces": []any{
+					map[string]any{
+						"type":          "NetworkDevice",
+						"networkDevice": map[string]any{"interfaceName": "eth0"},
+					},
+				},
+				"neighbors": []any{
+					map[string]any{"address": "192.168.1.1", "asn": int64(65001)},
+				},
+				"gracefulRestart": map[string]any{"selectDeferTimeSeconds": int64(3601)},
+			}),
+			errSubstr: "should be less than or equal to 3600",
 		},
 		{
 			name: "L3VNI hostSession localCIDRs invalid CIDR",

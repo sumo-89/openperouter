@@ -1382,8 +1382,9 @@ func TestGracefulRestart(t *testing.T) {
 				},
 			},
 			GracefulRestart: &GracefulRestart{
-				RestartTime:   120,
-				StalePathTime: 360,
+				RestartTime:     120,
+				StalePathTime:   360,
+				SelectDeferTime: 240,
 			},
 		},
 	}
@@ -1414,8 +1415,42 @@ func TestGracefulRestartCustomTimers(t *testing.T) {
 				},
 			},
 			GracefulRestart: &GracefulRestart{
-				RestartTime:   90,
-				StalePathTime: 180,
+				RestartTime:     90,
+				StalePathTime:   180,
+				SelectDeferTime: 240,
+			},
+		},
+	}
+	if err := ApplyConfig(context.Background(), &config, updater); err != nil {
+		t.Fatalf("Failed to apply config: %s", err)
+	}
+
+	testCheckConfigFile(t)
+}
+
+func TestGracefulRestartSelectDeferTime(t *testing.T) {
+	configFile := testSetup(t)
+	updater := testUpdater(configFile)
+
+	config := Config{
+		Underlay: UnderlayConfig{
+			MyASN: 64512,
+			TunnelEndpoint: &TunnelEndpoint{
+				IPv4CIDR: "100.64.0.1/32",
+			},
+			RouterID: "10.0.0.1",
+			Neighbors: []NeighborConfig{
+				{
+					ASN:                   mustNewPeerASNFromNumber(64512),
+					Addr:                  "192.168.1.2",
+					ID:                    "192.168.1.2",
+					NetworkLayerProtocols: []networklayerprotocol.NLP{{AFI: networklayerprotocol.IPv4, SAFI: networklayerprotocol.Unicast}},
+				},
+			},
+			GracefulRestart: &GracefulRestart{
+				RestartTime:     30,
+				StalePathTime:   360,
+				SelectDeferTime: 20,
 			},
 		},
 	}

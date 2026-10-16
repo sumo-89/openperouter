@@ -3711,17 +3711,26 @@ func TestAPItoFRRGracefulRestart(t *testing.T) {
 		{
 			name: "GR enabled with defaults",
 			gr:   &v1alpha1.GracefulRestartConfig{},
-			want: &frr.GracefulRestart{RestartTime: 120, StalePathTime: 360},
+			want: &frr.GracefulRestart{RestartTime: 120, StalePathTime: 360, SelectDeferTime: 240},
 		},
 		{
 			name: "GR enabled with custom timers",
-			gr:   &v1alpha1.GracefulRestartConfig{RestartTimeSeconds: new(int64(90)), StalePathTimeSeconds: new(int64(180))},
-			want: &frr.GracefulRestart{RestartTime: 90, StalePathTime: 180},
+			gr: &v1alpha1.GracefulRestartConfig{
+				RestartTimeSeconds:     new(int64(90)),
+				StalePathTimeSeconds:   new(int64(180)),
+				SelectDeferTimeSeconds: new(int64(20)),
+			},
+			want: &frr.GracefulRestart{RestartTime: 90, StalePathTime: 180, SelectDeferTime: 20},
 		},
 		{
 			name: "GR enabled with partial custom timers",
 			gr:   &v1alpha1.GracefulRestartConfig{RestartTimeSeconds: new(int64(60))},
-			want: &frr.GracefulRestart{RestartTime: 60, StalePathTime: 360},
+			want: &frr.GracefulRestart{RestartTime: 60, StalePathTime: 360, SelectDeferTime: 240},
+		},
+		{
+			name: "GR enabled with select-defer-time disabled",
+			gr:   &v1alpha1.GracefulRestartConfig{SelectDeferTimeSeconds: new(int64(0))},
+			want: &frr.GracefulRestart{RestartTime: 120, StalePathTime: 360, SelectDeferTime: 0},
 		},
 	}
 

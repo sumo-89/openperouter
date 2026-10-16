@@ -248,6 +248,7 @@ _Appears in:_
 | --- | --- | --- | --- |
 | `restartTimeSeconds` _integer_ | restartTimeSeconds is the time in seconds that the restarting router<br />requests its peers to preserve routes. Peers will wait this long<br />before removing stale routes. | 120 | Maximum: 4095 <br />Minimum: 1 <br />Optional: \{\} <br /> |
 | `stalePathTimeSeconds` _integer_ | stalePathTimeSeconds is the time in seconds that stale paths from a<br />restarting peer are retained locally. | 360 | Maximum: 4095 <br />Minimum: 1 <br />Optional: \{\} <br /> |
+| `selectDeferTimeSeconds` _integer_ | selectDeferTimeSeconds bounds how long, after a restart, the router<br />defers bestpath selection while it waits for End-of-RIB from its peers.<br />Routes are installed only once every peer has sent End-of-RIB or this<br />timer expires. Keep it below the time the dataplane retains the routes<br />of the previous run (for zebra, the kernel graceful restart time set<br />with -K), otherwise those routes are swept before the restarted router<br />installs them again. | 240 | Maximum: 3600 <br />Minimum: 0 <br />Optional: \{\} <br /> |
 
 
 #### HostMaster

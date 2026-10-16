@@ -39,8 +39,9 @@ type Config struct {
 }
 
 type GracefulRestart struct {
-	RestartTime   int64
-	StalePathTime int64
+	RestartTime     int64
+	StalePathTime   int64
+	SelectDeferTime int64
 }
 
 type UnderlayConfig struct {

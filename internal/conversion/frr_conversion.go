@@ -262,8 +262,9 @@ func applyGracefulRestart(config *frr.UnderlayConfig, gr *v1alpha1.GracefulResta
 		return
 	}
 	config.GracefulRestart = &frr.GracefulRestart{
-		RestartTime:   ptr.Deref(gr.RestartTimeSeconds, 120),
-		StalePathTime: ptr.Deref(gr.StalePathTimeSeconds, 360),
+		RestartTime:     ptr.Deref(gr.RestartTimeSeconds, 120),
+		StalePathTime:   ptr.Deref(gr.StalePathTimeSeconds, 360),
+		SelectDeferTime: ptr.Deref(gr.SelectDeferTimeSeconds, 240),
 	}
 	const grConnectRetrySeconds = int64(5)
 	for i := range config.Neighbors {

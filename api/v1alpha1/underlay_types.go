@@ -247,6 +247,19 @@ type GracefulRestartConfig struct {
 	// +default=360
 	// +optional
 	StalePathTimeSeconds *int64 `json:"stalePathTimeSeconds,omitempty"`
+
+	// selectDeferTimeSeconds bounds how long, after a restart, the router
+	// defers bestpath selection while it waits for End-of-RIB from its peers.
+	// Routes are installed only once every peer has sent End-of-RIB or this
+	// timer expires. Keep it below the time the dataplane retains the routes
+	// of the previous run (for zebra, the kernel graceful restart time set
+	// with -K), otherwise those routes are swept before the restarted router
+	// installs them again.
+	// +kubebuilder:validation:Minimum=0
+	// +kubebuilder:validation:Maximum=3600
+	// +default=240
+	// +optional
+	SelectDeferTimeSeconds *int64 `json:"selectDeferTimeSeconds,omitempty"`
 }
 
 // TunnelEndpointConfig contains tunnel endpoint configuration for the underlay.

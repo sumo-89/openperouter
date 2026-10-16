@@ -43,6 +43,7 @@ Omitting the `gracefulRestart` field entirely disables Graceful Restart.
 | `gracefulRestart` | object | Enables BGP Graceful Restart when present. Omit to disable. | _(disabled)_ | |
 | `gracefulRestart.restartTime` | integer | Seconds that the restarting router requests peers to preserve routes. Peers wait this long before removing stale routes. | 120 | 1–4095 |
 | `gracefulRestart.stalePathTime` | integer | Seconds that stale paths from a restarting peer are retained locally. | 360 | 1–4095 |
+| `gracefulRestart.selectDeferTimeSeconds` | integer | Seconds that bestpath selection waits for End-of-RIB from the peers after a restart. Keep it below zebra's kernel retain time (`-K`). | 240 | 0–3600 |
 
 ## Full Example
 
@@ -73,7 +74,7 @@ spec:
 
 When the controller detects the `gracefulRestart` field on the Underlay, it configures FRR and the router pod for resilient restarts:
 
-1. **FRR configuration**: The generated `frr.conf` includes `bgp graceful-restart`, `bgp graceful-restart preserve-fw-state`, and the configured `restart-time` and `stalepath-time` values.
+1. **FRR configuration**: The generated `frr.conf` includes `bgp graceful-restart`, `bgp graceful-restart preserve-fw-state`, and the configured `restart-time`, `stalepath-time` and `select-defer-time` values in the default BGP instance. Values equal to FRR's defaults are not rendered.
 2. **Zebra kernel retention**: Zebra starts with the `-K 60` flag, which tells it to retain existing kernel nexthop objects, routes, and FDB entries for 60 seconds after startup instead of flushing them.
 3. **Persistent configuration**: The init container copies the persistent `frr.conf` (written by the controller on every config push) into FRR's startup directory. This means FRR starts with its full BGP configuration — including neighbor definitions and Graceful Restart settings — rather than a blank default.
 4. **Fast reconnection**: The controller automatically sets `timers connect 5` on all underlay neighbors, reducing the BGP connect-retry interval to 5 seconds so the new FRR process reconnects quickly after the old session drops.
