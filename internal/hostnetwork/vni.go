@@ -282,18 +282,18 @@ func setupVNI(ctx context.Context, params VNIParams, bridgeOptions ...NetlinkOpt
 // RemoveAllVNIs removes from the target namespace the bridges / veths
 // for all VNIs.
 func RemoveAllVNIs(targetNS string) error {
-	return RemoveNonConfiguredVNIs(targetNS, []VNIParams{})
+	return RemoveNonConfiguredVNIs(context.Background(), targetNS, []VNIParams{})
 }
 
 // RemoveNonConfiguredVNIs removes from the target namespace the
 // leftovers corresponding to VNIs that are not configured anymore.
-func RemoveNonConfiguredVNIs(targetNS string, params []VNIParams) error {
+func RemoveNonConfiguredVNIs(ctx context.Context, targetNS string, params []VNIParams) error {
 	vnis := map[int32]bool{}
 	for _, p := range params {
 		vnis[p.VNI] = true
 	}
 
-	errs := removeHostSideVNIs(vnis)
+	errs := removeHostSideVNIs(ctx, vnis)
 
 	ns, err := netns.GetFromPath(targetNS)
 	if err != nil {
@@ -318,7 +318,7 @@ func RemoveNonConfiguredVNIs(targetNS string, params []VNIParams) error {
 	return nil
 }
 
-func removeHostSideVNIs(vnis map[int32]bool) []error {
+func removeHostSideVNIs(ctx context.Context, vnis map[int32]bool) []error {
 	var failedDeletes []error
 
 	hostLinks, err := netlink.LinkList()
@@ -328,7 +328,7 @@ func removeHostSideVNIs(vnis map[int32]bool) []error {
 	if err := deleteLinksForType(BridgeLinkType, vnis, hostLinks, vniFromHostBridgeName); err != nil {
 		failedDeletes = append(failedDeletes, fmt.Errorf("remove bridge links: %w", err))
 	}
-	if err := removeOVSBridgesForVNIs(context.Background(), vnis); err != nil {
+	if err := removeOVSBridgesForVNIs(ctx, vnis); err != nil {
 		failedDeletes = append(failedDeletes, fmt.Errorf("remove OVS bridges: %w", err))
 	}
 
@@ -391,23 +391,17 @@ func netlinkTypeFor(linkType string) string {
 // removeOVSBridgesForVNIs removes auto-created OVS bridges that are not in the configured VNIs list.
 // Only deletes bridges with external_id "created-by: openperouter" (auto-created bridges).
 func removeOVSBridgesForVNIs(ctx context.Context, vnis map[int32]bool) error {
-	ovs, err := NewOVSClient(ctx)
-	if err != nil {
-		// OVS not available, skip cleanup gracefully
+	err := withOVSClient(ctx, func(ovs libovsclient.Client) error {
+		return removeOVSBridges(ctx, ovs, vnis)
+	})
+	if errors.Is(err, errOVSUnavailable) {
 		slog.Debug("OVS client not available, skipping OVS bridge cleanup", "error", err)
 		return nil
 	}
-	defer ovs.Close()
+	return err
+}
 
-	if _, err := ovs.Monitor(ctx, ovs.NewMonitor(
-		libovsclient.WithTable(&ovsmodel.OpenvSwitch{}),
-		libovsclient.WithTable(&ovsmodel.Bridge{}),
-		libovsclient.WithTable(&ovsmodel.Port{}),
-		libovsclient.WithTable(&ovsmodel.Interface{}),
-	)); err != nil {
-		return fmt.Errorf("failed to setup OVS monitor: %w", err)
-	}
-
+func removeOVSBridges(ctx context.Context, ovs libovsclient.Client, vnis map[int32]bool) error {
 	var bridges []ovsmodel.Bridge
 	if err := ovs.List(ctx, &bridges); err != nil {
 		return fmt.Errorf("failed to list OVS bridges: %w", err)

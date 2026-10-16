@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"slices"
 
 	"k8s.io/apimachinery/pkg/util/sets"
 
@@ -116,6 +117,9 @@ func (k *KernelDatapathConfigurator) Configure(ctx context.Context, config inter
 		configuredL3VPNs = append(configuredL3VPNs, l3vpn)
 	}
 
+	ovsCtx, closeOVS := withSharedOVSClient(ctx, hostConfig.L2VNIs)
+	defer closeOVS()
+
 	var configuredL2VNIs []hostnetwork.L2VNIParams
 	for _, vni := range hostConfig.L2VNIs {
 		if failedL3Domains.Has(vni.VRF) {
@@ -128,7 +132,7 @@ func (k *KernelDatapathConfigurator) Configure(ctx context.Context, config inter
 			continue
 		}
 		slog.InfoContext(ctx, "setting up L2VNI", "vni", vni.VNI)
-		if err := hostnetwork.SetupL2VNI(ctx, vni); err != nil {
+		if err := hostnetwork.SetupL2VNI(ovsCtx, vni); err != nil {
 			resourceErrors = append(resourceErrors, &openpeerrors.ResourceError{
 				Obj: v1alpha1.FailedResource{
 					Kind: openpeerrors.KindL2VNI, Name: vni.Name, Reason: reason, Message: err.Error(),
@@ -173,7 +177,7 @@ func (k *KernelDatapathConfigurator) Configure(ctx context.Context, config inter
 	}
 
 	slog.InfoContext(ctx, "removing deleted vnis")
-	if err := hostnetwork.RemoveNonConfiguredVNIs(config.targetNamespace, configuredVNIs); err != nil {
+	if err := hostnetwork.RemoveNonConfiguredVNIs(ovsCtx, config.targetNamespace, configuredVNIs); err != nil {
 		return fmt.Errorf("failed to remove deleted vnis: %w", err)
 	}
 	bridgerefresh.StopForRemovedVNIs(configuredL2VNIs)
@@ -275,4 +279,24 @@ func areAllUnderlayInterfacesToBeRemoved(
 		)
 	}
 	return allRemoved, nil
+}
+
+// withSharedOVSClient returns a context carrying one OVSDB client for all the
+// L2VNIs of a pass, and the function that closes it. If the client cannot be
+// opened the pass goes on without it and every L2VNI opens its own, so that
+// an OVSDB outage fails only the L2VNIs that need OVS.
+func withSharedOVSClient(ctx context.Context, l2vnis []hostnetwork.L2VNIParams) (context.Context, func()) {
+	if !slices.ContainsFunc(l2vnis, hasOVSHostMaster) {
+		return ctx, func() {}
+	}
+	ovs, err := hostnetwork.NewMonitoredOVSClient(ctx)
+	if err != nil {
+		slog.ErrorContext(ctx, "failed to open a shared OVSDB client, every L2VNI opens its own", "error", err)
+		return ctx, func() {}
+	}
+	return hostnetwork.WithOVSClient(ctx, ovs), ovs.Close
+}
+
+func hasOVSHostMaster(vni hostnetwork.L2VNIParams) bool {
+	return vni.HostMaster != nil && vni.HostMaster.Type == hostnetwork.OVSBridgeLinkType
 }

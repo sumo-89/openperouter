@@ -128,7 +128,7 @@ func RemoveNonConfiguredVNIs(ctx context.Context, client *Client, targetNamespac
 		}
 	}
 
-	return hostnetwork.RemoveNonConfiguredVNIs(targetNamespace, configured)
+	return hostnetwork.RemoveNonConfiguredVNIs(ctx, targetNamespace, configured)
 }
 
 // RemoveAllVRFs removes all non-default VRFs from the target namespace.

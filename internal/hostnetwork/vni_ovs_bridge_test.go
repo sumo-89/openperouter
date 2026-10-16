@@ -13,6 +13,7 @@ import (
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 	"github.com/openperouter/openperouter/internal/netnamespace"
+	"github.com/openperouter/openperouter/internal/ovsdbtest"
 	"github.com/openperouter/openperouter/internal/ovsmodel"
 	libovsclient "github.com/ovn-kubernetes/libovsdb/client"
 	"github.com/vishvananda/netlink"
@@ -55,7 +56,7 @@ var _ = Describe("L2 VNI configuration with OVS bridges", func() {
 		}, 30*time.Second, 1*time.Second).Should(Succeed())
 
 		By("removing the VNI")
-		err = RemoveNonConfiguredVNIs(testNSPath(), []VNIParams{})
+		err = RemoveNonConfiguredVNIs(context.Background(), testNSPath(), []VNIParams{})
 		Expect(err).NotTo(HaveOccurred())
 		err = RemoveNonConfiguredVRFs(testNSPath(), map[string]bool{})
 		Expect(err).NotTo(HaveOccurred())
@@ -98,7 +99,7 @@ var _ = Describe("L2 VNI configuration with OVS bridges", func() {
 		}, 30*time.Second, 1*time.Second).Should(Succeed())
 
 		By("removing the VNI")
-		err = RemoveNonConfiguredVNIs(testNSPath(), []VNIParams{})
+		err = RemoveNonConfiguredVNIs(context.Background(), testNSPath(), []VNIParams{})
 		Expect(err).NotTo(HaveOccurred())
 		err = RemoveNonConfiguredVRFs(testNSPath(), map[string]bool{})
 		Expect(err).NotTo(HaveOccurred())
@@ -116,6 +117,67 @@ var _ = Describe("L2 VNI configuration with OVS bridges", func() {
 				}
 				return nil
 			})
+		}, 30*time.Second, 1*time.Second).Should(Succeed())
+	})
+
+	It("should attach and remove several L2VNIs through one shared OVSDB client", func() {
+		const bridgeName = "test-ovs-br"
+		Expect(createExternalOVSBridge(bridgeName)).To(Succeed(), "must pre-provision an OVS bridge")
+		createVRFInNamespace(testNS, "testred")
+
+		By("counting the OVSDB connections the pass opens")
+		saved := OVSSocketPath
+		proxy, connections := ovsdbtest.CountConnections(GinkgoT(), strings.TrimPrefix(saved, "unix:"))
+		OVSSocketPath = "unix:" + proxy
+		DeferCleanup(func() { OVSSocketPath = saved })
+
+		ovs, err := NewMonitoredOVSClient(context.Background())
+		Expect(err).NotTo(HaveOccurred())
+		defer ovs.Close()
+		ctx := WithOVSClient(context.Background(), ovs)
+
+		all := sharedClientTestVNIs(bridgeName)
+		for _, params := range all {
+			Expect(SetupL2VNI(ctx, params)).To(Succeed())
+		}
+
+		By("removing the first L2VNI through the same client")
+		Expect(RemoveNonConfiguredVNIs(ctx, testNSPath(), []VNIParams{all[1].VNIParams, all[2].VNIParams})).To(Succeed())
+		Expect(connections.Load()).To(Equal(int32(1)), "attach and cleanup must share the one connection")
+		// The checks below open clients of their own.
+		OVSSocketPath = saved
+
+		Eventually(func(g Gomega) {
+			checkVethNotAttachedToOVSBridge(g, bridgeName, vethNamesFromVNI(all[0].VNI).HostSide)
+			for _, params := range all[1:] {
+				validateL2HostLeg(g, params)
+				checkVethAttachedToOVSBridge(g, bridgeName, vethNamesFromVNI(params.VNI).HostSide)
+			}
+		}, 30*time.Second, 1*time.Second).Should(Succeed())
+	})
+
+	It("should attach the remaining L2VNIs when the shared OVSDB client is closed after the first", func() {
+		const bridgeName = "test-ovs-dc1"
+		Expect(createExternalOVSBridge(bridgeName)).To(Succeed(), "must pre-provision an OVS bridge")
+		createVRFInNamespace(testNS, "testred")
+
+		ovs, err := NewMonitoredOVSClient(context.Background())
+		Expect(err).NotTo(HaveOccurred())
+		ctx := WithOVSClient(context.Background(), ovs)
+
+		all := sharedClientTestVNIs(bridgeName)
+		Expect(SetupL2VNI(ctx, all[0])).To(Succeed())
+
+		By("closing the shared client after the first L2VNI")
+		ovs.Close()
+		for _, params := range all[1:] {
+			Expect(SetupL2VNI(ctx, params)).To(Succeed())
+		}
+		Eventually(func(g Gomega) {
+			for _, params := range all {
+				validateL2HostLeg(g, params)
+				checkVethAttachedToOVSBridge(g, bridgeName, vethNamesFromVNI(params.VNI).HostSide)
+			}
 		}, 30*time.Second, 1*time.Second).Should(Succeed())
 	})
 
@@ -149,7 +211,7 @@ var _ = Describe("L2 VNI configuration with OVS bridges", func() {
 		}, 30*time.Second, 1*time.Second).Should(Succeed())
 
 		By("removing VNI 100, keeping VNI 101")
-		err = RemoveNonConfiguredVNIs(testNSPath(), []VNIParams{params2.VNIParams})
+		err = RemoveNonConfiguredVNIs(context.Background(), testNSPath(), []VNIParams{params2.VNIParams})
 		Expect(err).NotTo(HaveOccurred())
 		err = RemoveNonConfiguredVRFs(testNSPath(), map[string]bool{params2.VRF: true})
 		Expect(err).NotTo(HaveOccurred())
@@ -351,4 +413,19 @@ func cleanupOVSBridges() {
 			_ = exec.Command("ovs-vsctl", "del-br", br).Run()
 		}
 	}
+}
+
+func sharedClientTestVNIs(bridgeName string) []L2VNIParams {
+	vnis := []int32{100, 101, 102}
+	params := make([]L2VNIParams, 0, len(vnis))
+	for _, vni := range vnis {
+		params = append(params, L2VNIParams{
+			VNIParams: VNIParams{
+				VRF: "testred", TargetNS: testNSPath(),
+				VTEPIP: "192.170.0.9/32", VNI: vni, VXLanPort: new(int32(4789)),
+			},
+			HostMaster: &HostMaster{Type: OVSBridgeLinkType, Name: new(bridgeName)},
+		})
+	}
+	return params
 }

@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"log/slog"
 	"slices"
+	"sync/atomic"
 	"time"
 
 	libovsclient "github.com/ovn-kubernetes/libovsdb/client"
@@ -96,6 +97,28 @@ func EnsureBridge(ctx context.Context, ovs libovsclient.Client, bridgeName strin
 	return realUUID, nil
 }
 
+// NewMonitoredOVSClient connects to OVSDB and starts the monitor that attaching
+// and removing L2VNI ports read from.
+func NewMonitoredOVSClient(ctx context.Context) (libovsclient.Client, error) {
+	ovs, err := NewOVSClient(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("%w: %w", errOVSUnavailable, err)
+	}
+	if err := monitorForL2VNIs(ctx, ovs); err != nil {
+		ovs.Close()
+		return nil, err
+	}
+	return ovs, nil
+}
+
+// WithOVSClient returns a context carrying a client made by
+// NewMonitoredOVSClient. SetupL2VNI and RemoveNonConfiguredVNIs use it instead
+// of opening a client of their own, so that one reconcile pass downloads the
+// OVS tables once.
+func WithOVSClient(ctx context.Context, ovs libovsclient.Client) context.Context {
+	return context.WithValue(ctx, ovsClientKey{}, &sharedOVSClient{client: ovs})
+}
+
 func ensureOVSBridgeAndAttach(ctx context.Context, bridgeName, ifaceName string) error {
 	slog.Info("ensureOVSBridgeAndAttach", "bridge", bridgeName, "interface", ifaceName)
 
@@ -106,30 +129,14 @@ func ensureOVSBridgeAndAttach(ctx context.Context, bridgeName, ifaceName string)
 	}
 	slog.Info("interface exists on host", "name", ifaceName, "index", link.Attrs().Index, "type", link.Type())
 
-	ovs, err := NewOVSClient(ctx)
-	if err != nil {
-		return err
-	}
-	defer ovs.Close()
-
-	return ensureOVSBridgeAndAttachWithClient(ctx, ovs, bridgeName, ifaceName)
+	return withOVSClient(ctx, func(ovs libovsclient.Client) error {
+		return attachWithMonitoredClient(ctx, ovs, bridgeName, ifaceName)
+	})
 }
 
-// ensureOVSBridgeAndAttachWithClient ensures an OVS bridge exists and attaches ifaceName as a port.
-// This version accepts a client parameter for testing.
-func ensureOVSBridgeAndAttachWithClient(ctx context.Context, ovs libovsclient.Client, bridgeName, ifaceName string) error {
-	// Cache for indexed operations
-	if _, err := ovs.Monitor(ctx,
-		ovs.NewMonitor(
-			libovsclient.WithTable(&ovsmodel.OpenvSwitch{}),
-			libovsclient.WithTable(&ovsmodel.Bridge{}),
-			libovsclient.WithTable(&ovsmodel.Port{}),
-			libovsclient.WithTable(&ovsmodel.Interface{}),
-		),
-	); err != nil {
-		return fmt.Errorf("failed to setup monitor: %w", err)
-	}
-
+// attachWithMonitoredClient attaches ifaceName to the bridge through a client
+// whose monitor already covers the tables the attach reads.
+func attachWithMonitoredClient(ctx context.Context, ovs libovsclient.Client, bridgeName, ifaceName string) error {
 	bridgeUUID, err := EnsureBridge(ctx, ovs, bridgeName)
 	if err != nil {
 		return fmt.Errorf("failed to ensure OVS bridge %q exists: %w", bridgeName, err)
@@ -368,4 +375,63 @@ func waitForOVSBridgeInterface(name string) (netlink.Link, error) {
 			return nil, fmt.Errorf("timeout waiting for OVS bridge interface %q to appear", name)
 		}
 	}
+}
+
+var errOVSUnavailable = errors.New("OVSDB not available")
+
+type ovsClientKey struct{}
+
+// sharedOVSClient is the client of a reconcile pass, and whether it has lost
+// its connection, after which the rest of the pass does not use it.
+type sharedOVSClient struct {
+	client libovsclient.Client
+	lost   atomic.Bool
+}
+
+// withOVSClient runs f with the pass's shared client, or with a client of its
+// own when the context carries none. The shared client has no reconnect: once
+// OVSDB drops it, every call on it fails for the rest of the pass, so on a lost
+// connection f is run again through a client of its own and the shared one is
+// no longer used.
+func withOVSClient(ctx context.Context, f func(libovsclient.Client) error) error {
+	if shared, ok := ctx.Value(ovsClientKey{}).(*sharedOVSClient); ok && !shared.lost.Load() {
+		err := f(shared.client)
+		if !lostConnection(err, shared.client) {
+			return err
+		}
+		shared.lost.Store(true)
+		slog.Warn("shared OVSDB client lost its connection, opening a new one", "error", err)
+	}
+
+	ovs, err := NewMonitoredOVSClient(ctx)
+	if err != nil {
+		return err
+	}
+	defer ovs.Close()
+	return f(ovs)
+}
+
+// lostConnection tells whether err from ovs means that its connection is gone,
+// rather than that the operation itself failed. Connected() alone does not
+// tell: libovsdb clears it only after its handlers have shut down, and until
+// then every transaction fails with ErrNotConnected.
+func lostConnection(err error, ovs libovsclient.Client) bool {
+	if err == nil {
+		return false
+	}
+	return errors.Is(err, libovsclient.ErrNotConnected) || !ovs.Connected()
+}
+
+func monitorForL2VNIs(ctx context.Context, ovs libovsclient.Client) error {
+	if _, err := ovs.Monitor(ctx,
+		ovs.NewMonitor(
+			libovsclient.WithTable(&ovsmodel.OpenvSwitch{}),
+			libovsclient.WithTable(&ovsmodel.Bridge{}),
+			libovsclient.WithTable(&ovsmodel.Port{}),
+			libovsclient.WithTable(&ovsmodel.Interface{}),
+		),
+	); err != nil {
+		return fmt.Errorf("failed to setup monitor: %w", err)
+	}
+	return nil
 }

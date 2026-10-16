@@ -169,7 +169,7 @@ var _ = Describe("L3 VNI configuration", func() {
 		toDelete := params[1]
 
 		By("removing non configured L3VNIs")
-		err := RemoveNonConfiguredVNIs(testNSPath(), []VNIParams{remaining.VNIParams})
+		err := RemoveNonConfiguredVNIs(context.Background(), testNSPath(), []VNIParams{remaining.VNIParams})
 		Expect(err).NotTo(HaveOccurred())
 		err = RemoveNonConfiguredVRFs(testNSPath(), map[string]bool{remaining.VRF: true})
 		Expect(err).NotTo(HaveOccurred())
@@ -367,7 +367,7 @@ var _ = Describe("L2 VNI configuration", func() {
 		}, 30*time.Second, 1*time.Second).Should(Succeed())
 
 		By("removing the VNI")
-		err = RemoveNonConfiguredVNIs(testNSPath(), []VNIParams{})
+		err = RemoveNonConfiguredVNIs(context.Background(), testNSPath(), []VNIParams{})
 		Expect(err).NotTo(HaveOccurred())
 		err = RemoveNonConfiguredVRFs(testNSPath(), map[string]bool{})
 		Expect(err).NotTo(HaveOccurred())
@@ -437,7 +437,7 @@ var _ = Describe("L2 VNI configuration", func() {
 		toDelete := params[1]
 
 		By("removing non configured L2VNIs")
-		err := RemoveNonConfiguredVNIs(testNSPath(), []VNIParams{remaining.VNIParams})
+		err := RemoveNonConfiguredVNIs(context.Background(), testNSPath(), []VNIParams{remaining.VNIParams})
 		Expect(err).NotTo(HaveOccurred())
 		err = RemoveNonConfiguredVRFs(testNSPath(), map[string]bool{remaining.VRF: true})
 		Expect(err).NotTo(HaveOccurred())
